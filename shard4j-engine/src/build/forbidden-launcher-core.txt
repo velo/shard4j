@@ -1,0 +1,11 @@
+# Boundary check 3 of section 13.2 of the spec.
+#
+# shard4j-engine delegates to Jupiter through TestEngine.discover(request, uniqueId)
+# (@API(STABLE)) plus the 5-arg ExecutionRequest.create (one @API(INTERNAL) symbol).
+# It must never reach for the launcher orchestrators. A dependency-tree check cannot
+# see this: org.junit.platform.launcher.core ships inside junit-platform-launcher,
+# which is legitimately on the classpath, so the tree stays green while the engine
+# quietly re-acquires three INTERNAL types and a classpath-only constraint (that
+# package is qualified-exported, so a module-path consumer would break).
+@defaultMessage shard4j-engine must not reference org.junit.platform.launcher.core: use TestEngine.discover plus the 5-arg ExecutionRequest.create instead of the launcher orchestrators.
+org.junit.platform.launcher.core.**

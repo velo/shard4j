@@ -1,0 +1,27 @@
+target/
+*.class
+
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+.mvn/wrapper/maven-wrapper.jar
+dependency-reduced-pom.xml
+
+# Nothing that could carry a credential is ever committed here.
+.env
+.env.*
+*.secret
+*.token
+*.pem
+*.p12
+*.jks
+
+*.log
+.DS_Store
