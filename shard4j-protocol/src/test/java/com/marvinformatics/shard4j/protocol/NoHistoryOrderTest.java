@@ -22,7 +22,7 @@ class NoHistoryOrderTest {
         "com.example.orders.CartIT#total()|d95effa4ece2c537",
         "com.example.orders.CartIT#each(java.lang.String)|f17c61f68ca246ce",
         "com.example.orders.PingResourceIT#hello()|95f07e048e4edd89",
-        "com.example.orders.CartIT$WhenEmpty#total(int[])|b697ce4ef1dbfbdf",
+        "com.example.orders.CartIT$WhenEmpty#total([I)|26ad58c81459d4ee",
         "com.example.orders.CartIT#slow1()|02eefc9a31204a7a",
         "com.example.orders.CartIT#a()|1f500aaa154684f5",
         "com.example.orders.CartIT#b()|e5e6f776330f44f2",
