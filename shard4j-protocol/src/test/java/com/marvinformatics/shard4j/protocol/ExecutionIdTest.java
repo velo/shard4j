@@ -16,7 +16,8 @@ class ExecutionIdTest {
 
   @Test
   void parsesAPlainMethod() {
-    String wire = "[engine:junit-jupiter]/[class:com.example.orders.PingResourceIT]/[method:hello()]";
+    String wire =
+        "[engine:junit-jupiter]/[class:com.example.orders.PingResourceIT]/[method:hello()]";
 
     ExecutionId id = ExecutionId.parse(wire);
 
@@ -163,7 +164,8 @@ class ExecutionIdTest {
 
     MalformedExecutionIdException thrown =
         assertThrows(
-            MalformedExecutionIdException.class, () -> ExecutionId.stripOuterEngineSegment(vintage));
+            MalformedExecutionIdException.class,
+            () -> ExecutionId.stripOuterEngineSegment(vintage));
 
     assertEquals(vintage, thrown.id());
   }

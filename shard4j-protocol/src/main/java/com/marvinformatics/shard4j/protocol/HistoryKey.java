@@ -50,7 +50,8 @@ public record HistoryKey(String value) {
    * tie-break is reachable: real SHA-256 keys never collide in 64 bits, and an unreachable
    * branch is an unverifiable one.
    */
-  static int compareNoHistory(long leftOrderKey, String leftKey, long rightOrderKey, String rightKey) {
+  static int compareNoHistory(
+      long leftOrderKey, String leftKey, long rightOrderKey, String rightKey) {
     int byOrderKey = Long.compareUnsigned(leftOrderKey, rightOrderKey);
     return byOrderKey != 0 ? byOrderKey : leftKey.compareTo(rightKey);
   }

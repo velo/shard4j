@@ -74,7 +74,8 @@ public record ExecutionId(String value) {
     if (segments.size() < 3
         || !segments.get(0).is("engine", JUPITER_ENGINE)
         || !segments.get(1).isType("class")) {
-      throw new MalformedExecutionIdException(raw, "must start with [engine:junit-jupiter]/[class:");
+      throw new MalformedExecutionIdException(
+          raw, "must start with [engine:junit-jupiter]/[class:");
     }
     require(FQCN, segments.get(1).value(), raw, "not a fully qualified class name");
 
