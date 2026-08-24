@@ -104,6 +104,16 @@ instead:
 `Automatic-Module-Name` keeps a stable module name available for anyone who does put these
 jars on a module path, at no cost. Revisit only if a real consumer needs true JPMS.
 
+## Testing
+
+Integration tests running the server on Docker are the cornerstone of automated testing
+here. Unit tests cover pure logic. Mock only as a last resort, where an integration test
+is genuinely impossible -- never for convenience.
+
+`shard4j-protocol` is pure logic with no I/O, which is why its 258 tests need neither a
+server nor a mock. That is the exception its nature earns, not the pattern to copy: the
+coordinator must be tested as a real running server in Docker.
+
 ## Repository hygiene -- enforced in CI
 
 - **No secrets, ever.** Values arrive only through `COORDINATOR_SECRETS` and
@@ -113,8 +123,8 @@ jars on a module path, at no cost. Revisit only if a real consumer needs true JP
   *destination* is not.
 - **No hostnames, registries, account ids, cluster names, namespaces or organisation names**
   in code, tests, fixtures or comments. `scripts/check-hygiene.sh` greps the tree for these
-  and fails the `build` job. The single allow-listed exception is the README's link to the
-  design issue and its "first known user" line.
+  and fails the `build` job. The single allow-listed file is the script itself, which has
+  to contain the patterns it looks for.
 - Example tenants are `example/orders-service` and friends; example packages are
   `com.example.*`.
 
