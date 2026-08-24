@@ -39,7 +39,8 @@ class HistoryKeyTest {
     HistoryKey unit = HistoryKey.from(ExecutionId.parse(template));
 
     for (int n = 1; n <= 6; n++) {
-      ExecutionId invocation = ExecutionId.parse(template + "/[test-template-invocation:#" + n + "]");
+      ExecutionId invocation =
+          ExecutionId.parse(template + "/[test-template-invocation:#" + n + "]");
 
       assertEquals(unit, HistoryKey.from(invocation), "invocation #" + n);
     }
