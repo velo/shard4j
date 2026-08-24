@@ -1,5 +1,7 @@
 package com.marvinformatics.shard4j.protocol;
 
+import java.util.Comparator;
+
 /**
  * Lease fencing token, compared lexicographically.
  *
@@ -10,8 +12,13 @@ package com.marvinformatics.shard4j.protocol;
  */
 public record Fence(long epoch, long incarnation, long seq) implements Comparable<Fence> {
 
+  private static final Comparator<Fence> LEXICOGRAPHIC =
+      Comparator.comparingLong(Fence::epoch)
+          .thenComparingLong(Fence::incarnation)
+          .thenComparingLong(Fence::seq);
+
   @Override
   public int compareTo(Fence other) {
-    throw new UnsupportedOperationException("not implemented");
+    return LEXICOGRAPHIC.compare(this, other);
   }
 }

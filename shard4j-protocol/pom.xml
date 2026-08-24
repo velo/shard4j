@@ -13,7 +13,7 @@
   <artifactId>shard4j-protocol</artifactId>
 
   <name>shard4j-protocol</name>
-  <description>Wire records, the execution-id grammar and the history-key derivation. Zero runtime dependencies.</description>
+  <description>Wire records, the identity value types and the no-history ordering hash. Zero runtime dependencies.</description>
 
   <dependencyManagement>
     <dependencies>
