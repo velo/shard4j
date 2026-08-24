@@ -2,9 +2,13 @@ package com.marvinformatics.shard4j.coordinator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 @SpringBootTest(
     properties = {
@@ -14,6 +18,13 @@ import org.springframework.boot.test.context.SpringBootTest;
     })
 class CoordinatorApplicationTest {
 
+  @TempDir static Path dataDir;
+
+  @DynamicPropertySource
+  static void dataDirectory(DynamicPropertyRegistry registry) {
+    registry.add("coordinator.data-dir", () -> dataDir.toString());
+  }
+
   @Autowired private CoordinatorSettings settings;
 
   @Test
@@ -21,5 +32,7 @@ class CoordinatorApplicationTest {
     assertThat(settings.tenantKey()).isEqualTo("example/orders-service");
     assertThat(settings.tenantSlug()).isEqualTo("orders-service");
     assertThat(settings.secrets()).hasSize(1);
+    assertThat(settings.leaseTtl().toMinutes()).isEqualTo(20);
+    assertThat(settings.maxClaimBatch()).isEqualTo(8);
   }
 }
