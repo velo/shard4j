@@ -63,12 +63,25 @@ v1 is single-tenant per instance -- one instance is one trust domain. **Do not a
 client-supplied tenant field to get multi-tenancy**: that converts one leaked secret into
 cross-tenant write access. A second tenant gets a second instance.
 
-## Full design
+## Design
 
-The complete specification -- identity, session model, HTTP contract, ordering, retry
-passes, the verdict, storage, the engine's contract points -- lives in
-[DataSQRL/cloud-compilation-wayfinder#97](https://github.com/DataSQRL/cloud-compilation-wayfinder/issues/97).
-DataSQRL is shard4j's first known user; nothing in this repository is specific to them.
+There is no public specification document yet; the shape of the system is this.
+
+A run is a session. Each CI shard registers with the coordinator, then loops: claim a
+class-batch, run it, report each result, claim again, and depart when the coordinator has
+nothing left to hand out. The coordinator answers each claim with the slowest
+not-yet-claimed classes first, using durations measured on earlier runs; a test with no
+history is ordered by a hash of its identity, so the schedule stays deterministic without
+being alphabetical. Every claim is a lease with an expiry and a fence, so a shard that
+stalls or dies loses its work back to the queue instead of taking the run down with it.
+
+Retries are additional passes over the session, not in-place re-runs: a failure leaves the
+test claimable again in the next pass, on whichever shard asks first, and there are at
+most three passes.
+
+The verdict is coverage, never exit codes and never queue emptiness: a session passes only
+when every registered test reached a terminal non-failing state. If every shard departs
+while tests remain unfinished, the session is incomplete, and incomplete is not green.
 
 ## Licence
 
