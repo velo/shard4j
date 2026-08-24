@@ -12,5 +12,10 @@ public enum TestState {
   PASSED,
   FAILED,
   SKIPPED,
-  ABORTED
+  ABORTED;
+
+  /** Absorbing states never re-enter any claimable pool, not even across an epoch bump. */
+  public boolean isAbsorbing() {
+    return this == PASSED || this == SKIPPED || this == ABORTED;
+  }
 }
