@@ -19,6 +19,7 @@
     <!-- The coordinator is a deployed service, not a library on someone else's
          classpath, so it is free to sit on the current LTS. -->
     <maven.compiler.release>${coordinator.compiler.release}</maven.compiler.release>
+    <testcontainers.version>1.21.3</testcontainers.version>
   </properties>
 
   <dependencyManagement>
@@ -47,6 +48,22 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- The testing cornerstone here is the real repackaged jar running in a real
+         container over real HTTP; Testcontainers builds that image from the jar as
+         part of the failsafe run. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>${testcontainers.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -81,6 +98,24 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <systemPropertyVariables>
+            <coordinator.app.jar>${project.build.directory}/${project.build.finalName}-app.jar</coordinator.app.jar>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
 
       <plugin>

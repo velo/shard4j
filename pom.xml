@@ -92,6 +92,9 @@
           <configuration>
             <showDeprecation>true</showDeprecation>
             <showWarnings>true</showWarnings>
+            <!-- Spring resolves @PathVariable names reflectively; without -parameters
+                 every handler method needs the name repeated by hand. -->
+            <parameters>true</parameters>
           </configuration>
         </plugin>
         <plugin>
