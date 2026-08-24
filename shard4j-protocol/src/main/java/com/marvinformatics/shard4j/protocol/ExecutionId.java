@@ -60,6 +60,16 @@ public record ExecutionId(String value) {
     return shape() != Shape.TEST_TEMPLATE_INVOCATION;
   }
 
+  /** The {@code [class:...]} segment's value: a fully qualified class name. */
+  String className() {
+    return Segment.split(value).get(1).value();
+  }
+
+  /** The lease unit's {@code <name>(<paramTypes>)} signature, invocation index dropped. */
+  String unitSignature() {
+    return Segment.split(value).get(2).value();
+  }
+
   private static Shape shapeOf(List<Segment> segments, String raw) {
     if (segments.size() < 3
         || !segments.get(0).is("engine", JUPITER_ENGINE)
