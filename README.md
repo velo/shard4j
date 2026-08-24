@@ -16,7 +16,7 @@ time spent waiting on one unlucky shard.
 
 | Module | Java | What it is |
 |---|---|---|
-| `shard4j-protocol` | 17 | Wire records, the execution-id grammar, the history-key derivation. Zero runtime dependencies. |
+| `shard4j-protocol` | 17 | Wire records, the identity value types, the no-history ordering hash. Zero runtime dependencies. |
 | `shard4j-coordinator` | 25 | The service. |
 | `shard4j-engine` | 17 | The JUnit Platform `TestEngine` and its coordinator client. Never depends on the coordinator. |
 | `shard4j-example` | 17 | A project that has never heard of shard4j, used as the boundary acceptance test. Not published. |

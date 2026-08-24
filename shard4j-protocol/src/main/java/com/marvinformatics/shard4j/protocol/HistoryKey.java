@@ -8,11 +8,11 @@ import java.util.Comparator;
 /**
  * The duration-history key: {@code <FQCN>#<methodName>(<paramTypes>)}.
  *
- * <p>A pure string-derived prefix of any execution-id shape -- drop the engine segments,
- * drop a trailing invocation segment, join class and method with {@code #}. One key per
- * lease unit exactly, so every invocation record of a template rolls up to its method's
- * key. Parameter types stay (they disambiguate overloads); parameter values and the
- * invocation index do not.
+ * <p>The engine builds it from a {@code MethodSource}'s three fields -- class name, method
+ * name, parameter types -- never from id surgery. One key per lease unit exactly: every
+ * invocation of a template shares the template's method source, so its records roll up to
+ * one key. Parameter types stay (they disambiguate overloads), rendered as JUnit renders
+ * them; parameter values and the invocation index do not.
  */
 public record HistoryKey(String value) {
 
@@ -23,10 +23,6 @@ public record HistoryKey(String value) {
   public static final Comparator<HistoryKey> NO_HISTORY_ORDER =
       (left, right) ->
           compareNoHistory(left.orderKey(), left.value(), right.orderKey(), right.value());
-
-  public static HistoryKey from(ExecutionId id) {
-    return new HistoryKey(id.className() + "#" + id.unitSignature());
-  }
 
   /**
    * Ordering key for a test with no duration history: the first 8 bytes, big-endian
