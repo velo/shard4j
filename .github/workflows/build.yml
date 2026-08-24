@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Hygiene gate
+        run: ./scripts/check-hygiene.sh
+
+      # Also runs the enforced module boundary: the engine may resolve no coordinator
+      # artifact and no Spring artifact, and shard4j-protocol's runtime tree must be empty.
+      - name: Build reactor
+        run: mvn -B -ntp verify

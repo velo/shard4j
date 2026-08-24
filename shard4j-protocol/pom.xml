@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.marvinformatics</groupId>
+    <artifactId>shard4j</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>shard4j-protocol</artifactId>
+
+  <name>shard4j-protocol</name>
+  <description>Wire records, the execution-id grammar and the history-key derivation. Zero runtime dependencies.</description>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>com.marvinformatics.shard4j.protocol</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <!-- Boundary check 2 of section 13.2: shard4j-protocol's runtime tree is
+               empty. Anything that is not test- or provided-scoped is a violation,
+               which also catches a transitive arrival. -->
+          <execution>
+            <id>enforce-empty-runtime-tree</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>*</exclude>
+                  </excludes>
+                  <includes>
+                    <include>*:*:*:*:test</include>
+                    <include>*:*:*:*:provided</include>
+                  </includes>
+                  <message>shard4j-protocol must have an EMPTY runtime dependency tree: wire records and identity functions only, no config, no hostname, no storage type, no JSON library. Move the offending dependency into whichever module actually needs it.</message>
+                </bannedDependencies>
+                <banTransitiveDependencies>
+                  <excludes>
+                    <exclude>*:*:*:*:test</exclude>
+                    <exclude>*:*:*:*:provided</exclude>
+                  </excludes>
+                  <message>shard4j-protocol must not pull anything in transitively.</message>
+                </banTransitiveDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

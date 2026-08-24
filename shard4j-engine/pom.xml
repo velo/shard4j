@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.marvinformatics</groupId>
+    <artifactId>shard4j</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>shard4j-engine</artifactId>
+
+  <name>shard4j-engine</name>
+  <description>The shard-side JUnit Platform TestEngine and its coordinator client. Lands on a consumer's test classpath.</description>
+
+  <properties>
+    <forbiddenapis.version>3.10</forbiddenapis.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.github.openfeign</groupId>
+        <artifactId>feign-bom</artifactId>
+        <version>${feign.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.marvinformatics</groupId>
+      <artifactId>shard4j-protocol</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-engine</artifactId>
+    </dependency>
+
+    <!-- The coordinator client. Feign is the house HTTP client: small,
+         framework-agnostic, and its Retryer / ErrorDecoder vocabulary is the one
+         the spec's retry-budget story is already written in. -->
+    <dependency>
+      <groupId>io.github.openfeign</groupId>
+      <artifactId>feign-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.openfeign</groupId>
+      <artifactId>feign-jackson</artifactId>
+    </dependency>
+
+    <!-- Already on any failsafe consumer's classpath, so the engine adds nothing
+         transitively by taking them at provided scope. -->
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-engine</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>com.marvinformatics.shard4j.engine</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <!-- Boundary check 1 of section 13.2. The engine ships on every consumer's
+               test classpath; the coordinator and its server framework must never
+               arrive with it, directly or transitively. -->
+          <execution>
+            <id>enforce-engine-never-reaches-coordinator</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>com.marvinformatics:shard4j-coordinator</exclude>
+                    <exclude>org.springframework:*</exclude>
+                    <exclude>org.springframework.boot:*</exclude>
+                    <exclude>org.springframework.*:*</exclude>
+                  </excludes>
+                  <message>MODULE BOUNDARY VIOLATION: shard4j-engine must never resolve shard4j-coordinator or any Spring artifact, at any scope, directly or transitively. The engine lands on every consumer's test classpath; the coordinator's server framework must not arrive with it. Section 11.1/13.2 of the spec. If you were about to "just move this helper up", move it into shard4j-protocol instead -- and only if it is a wire record or an identity function.</message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+
+          <!-- The positive half of the same invariant: the shipped tree is an
+               allow-list, so a new runtime dependency is a deliberate edit here
+               rather than something that arrives quietly. -->
+          <execution>
+            <id>enforce-engine-runtime-footprint</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>*</exclude>
+                  </excludes>
+                  <includes>
+                    <include>*:*:*:*:test</include>
+                    <include>*:*:*:*:provided</include>
+                    <include>com.marvinformatics:shard4j-protocol</include>
+                    <include>org.junit.platform:junit-platform-engine</include>
+                    <include>org.junit.platform:junit-platform-commons</include>
+                    <include>org.apiguardian:apiguardian-api</include>
+                    <include>org.opentest4j:opentest4j</include>
+                    <include>io.github.openfeign:feign-core</include>
+                    <include>io.github.openfeign:feign-jackson</include>
+                    <include>com.fasterxml.jackson.core:jackson-databind</include>
+                    <include>com.fasterxml.jackson.core:jackson-core</include>
+                    <include>com.fasterxml.jackson.core:jackson-annotations</include>
+                  </includes>
+                  <message>shard4j-engine's shipped runtime tree is an allow-list: shard4j-protocol + JUnit Platform + Feign + one JSON codec, and nothing else. Adding to it puts a jar on every consumer's test classpath -- if that is intended, add the coordinate to this rule and say why in the commit.</message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>de.thetaphi</groupId>
+        <artifactId>forbiddenapis</artifactId>
+        <version>${forbiddenapis.version}</version>
+        <configuration>
+          <failOnUnsupportedJava>false</failOnUnsupportedJava>
+          <signaturesFiles>
+            <signaturesFile>${project.basedir}/src/build/forbidden-launcher-core.txt</signaturesFile>
+          </signaturesFiles>
+        </configuration>
+        <executions>
+          <execution>
+            <id>enforce-no-launcher-core</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
