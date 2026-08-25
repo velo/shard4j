@@ -1,6 +1,6 @@
 package com.example.orders;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Disabled;
@@ -16,7 +16,7 @@ class InventoryAuditIT {
 
   @Test
   void countsStock() {
-    assertTrue(3 > 2);
+    assertThat(3).isGreaterThan(2);
   }
 
   @Disabled("ledger reconciliation is disabled in this branch")

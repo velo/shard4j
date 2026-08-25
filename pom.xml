@@ -52,25 +52,39 @@
     <maven.compiler.release>17</maven.compiler.release>
     <coordinator.compiler.release>25</coordinator.compiler.release>
 
-    <!-- JUnit Platform 1.13.x is the engine's floor and the reason the shipped
+    <!-- The language-level recipe has to track the table above: a recipe that rewrote
+         the engine's sources into Java 25 idiom would produce code its own release
+         level then refuses to compile. -->
+    <rewrite.java.recipe>org.openrewrite.java.migrate.UpgradeToJava17</rewrite.java.recipe>
+    <coordinator.rewrite.java.recipe>org.openrewrite.java.migrate.UpgradeToJava25</coordinator.rewrite.java.recipe>
+
+    <!-- JUnit Platform 1.14.x is the engine's floor and the reason the shipped
          baseline is 17 rather than something newer. -->
-    <junit.bom.version>5.13.4</junit.bom.version>
+    <junit.bom.version>5.14.4</junit.bom.version>
     <feign.version>13.14</feign.version>
     <lombok.version>1.18.46</lombok.version>
     <jackson.version>2.22.2</jackson.version>
     <spring-boot.version>4.1.1</spring-boot.version>
+    <assertj.version>3.27.7</assertj.version>
 
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-    <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
+    <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
-    <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
-    <maven-failsafe-plugin.version>3.5.4</maven-failsafe-plugin.version>
+    <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+    <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
     <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
-    <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+    <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
     <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-    <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
+    <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
     <gpg.keyname>D82FF933653EB8EC483709C77E738F7E2A355AAE</gpg.keyname>
+
+    <rewrite-maven-plugin.version>6.46.1</rewrite-maven-plugin.version>
+    <rewrite-testing-frameworks.version>3.44.0</rewrite-testing-frameworks.version>
+    <rewrite-migrate-java.version>3.42.1</rewrite-migrate-java.version>
+    <rewrite-spring.version>6.37.1</rewrite-spring.version>
+    <rewrite-static-analysis.version>2.41.1</rewrite-static-analysis.version>
+    <rewrite-java-security.version>3.38.1</rewrite-java-security.version>
   </properties>
 
   <dependencyManagement>
@@ -167,6 +181,118 @@
   </build>
 
   <profiles>
+    <!-- Mechanised best-practice migration: AssertJ over hand-rolled JUnit asserts,
+         Jupiter hygiene, and the language level each module is entitled to.
+
+         `mvn -Popenrewrite verify` rewrites the sources in place; the changes land
+         after that run's tests, so review the diff and run a plain `mvn verify` to
+         see the result compile and pass.
+
+         pom.xml is excluded. The recipes would happily "fix" the
+         two things this build deliberately pins: the per-module `release` indirection
+         (section "Java baselines" in AGENTS.md) and the JUnit Platform 1.13 floor that
+         keeps the engine consumable on JDK 17. Dependency and plugin versions stay a
+         human decision here. -->
+    <profile>
+      <id>openrewrite</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.openrewrite.maven</groupId>
+            <artifactId>rewrite-maven-plugin</artifactId>
+            <version>${rewrite-maven-plugin.version}</version>
+
+            <dependencies>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-testing-frameworks</artifactId>
+                <version>${rewrite-testing-frameworks.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-migrate-java</artifactId>
+                <version>${rewrite-migrate-java.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-static-analysis</artifactId>
+                <version>${rewrite-static-analysis.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-java-security</artifactId>
+                <version>${rewrite-java-security.version}</version>
+              </dependency>
+            </dependencies>
+
+            <executions>
+              <!-- Only the JUnit-framework recipes are confined to the test sources, and
+                   that confinement is load-bearing rather than cosmetic. `Assertj` chains
+                   in JUnit5BestPractices, which chains in the JUnit Platform upgrade,
+                   which renames `OutputDirectoryProvider` to `OutputDirectoryCreator`.
+                   shard4j-engine *implements* that Platform SPI in its main sources, so
+                   letting these recipes reach src/main/java rewrites the engine to an API
+                   its own classpath need not carry. Merge this execution into the next
+                   one and the engine stops compiling.
+
+                   Everything in the second execution is safe on any source file, so it is
+                   scoped to the whole module rather than split in two. -->
+              <execution>
+                <id>test-frameworks</id>
+                <goals>
+                  <goal>runNoFork</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <exportDatatables>true</exportDatatables>
+                  <activeRecipes>
+                    <!-- `Assertj` already chains in MigrateHamcrestToAssertJ,
+                         JUnitToAssertj and JUnit5BestPractices, plus the assertion
+                         simplifications that turn isEqualTo(0) into isZero() and
+                         friends. The junit5 entries below are the ones it does not
+                         reach. -->
+                    <recipe>org.openrewrite.java.testing.assertj.Assertj</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.AssertToAssertions</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.AssertThrowsOnLastStatement</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.LifecycleNonPrivate</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.TempDirNonFinal</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.CleanupJUnitImports</recipe>
+                  </activeRecipes>
+                  <exclusions>
+                    <exclusion>**/src/main/java/**</exclusion>
+                    <exclusion>pom.xml</exclusion>
+                  </exclusions>
+                </configuration>
+              </execution>
+              <execution>
+                <id>language-and-analysis</id>
+                <goals>
+                  <goal>runNoFork</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <exportDatatables>true</exportDatatables>
+                  <activeRecipes>
+                    <recipe>${rewrite.java.recipe}</recipe>
+                    <recipe>org.openrewrite.staticanalysis.CommonStaticAnalysis</recipe>
+                    <!-- Finds nothing today, which is the point of keeping it: the engine
+                         and the coordinator both hold a shared secret and both speak HTTP,
+                         and this is where a permissive trust manager or a `new Random()`
+                         token would be caught. A standing guard, in the spirit of the
+                         forbiddenapis check. -->
+                    <recipe>org.openrewrite.java.security.JavaSecurityBestPractices</recipe>
+                  </activeRecipes>
+                  <exclusions>
+                    <exclusion>pom.xml</exclusion>
+                  </exclusions>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!-- Everything Central requires beyond the plain jar: sources, javadoc and GPG
          signatures, published through the Central Portal. Kept in a profile so the
          everyday build stays fast and offline. -->

@@ -1,8 +1,8 @@
 package com.marvinformatics.shard4j.protocol;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Modifier;
@@ -49,7 +49,7 @@ class ReflectiveCodecContractTest {
           .map(Path::toString)
           .filter(name -> name.endsWith(".class"))
           .map(name -> name.substring(0, name.length() - ".class".length()))
-          .filter(name -> !name.equals("package-info"))
+          .filter(name -> !"package-info".equals(name))
           .map(ReflectiveCodecContractTest::load)
           .flatMap(type -> Stream.concat(Stream.of(type), Stream.of(type.getDeclaredClasses())))
           .filter(type -> Modifier.isPublic(type.getModifiers()))
@@ -67,28 +67,27 @@ class ReflectiveCodecContractTest {
   }
 
   @Test
-  void findsTheWholeWireSurface() throws IOException {
-    assertTrue(wireTypes().count() >= 20, "the scan must actually see the package");
+  void findsTheWholeWireSurface() throws Exception {
+    assertThat(wireTypes().count() >= 20).as("the scan must actually see the package").isTrue();
   }
 
   @ParameterizedTest
   @MethodSource("wireTypes")
   void isARecordOrAnEnum(Class<?> type) {
-    assertTrue(
-        type.isRecord() || type.isEnum() || Throwable.class.isAssignableFrom(type),
-        type.getName() + " is neither a record nor an enum");
+    assertThat(type.isRecord() || type.isEnum() || Throwable.class.isAssignableFrom(type))
+        .as(type.getName() + " is neither a record nor an enum")
+        .isTrue();
   }
 
   @ParameterizedTest
   @MethodSource("wireTypes")
   void carriesNoAnnotationACodecWouldHaveToUnderstand(Class<?> type) {
-    assertEquals(0, type.getAnnotations().length, type.getName() + " is annotated");
+    assertThat(type.getAnnotations().length).as(type.getName() + " is annotated").isZero();
     for (RecordComponent component : components(type)) {
-      assertEquals(
-          0,
-          component.getAnnotations().length,
-          type.getSimpleName() + "." + component.getName() + " is annotated");
-      assertEquals(0, component.getAccessor().getAnnotations().length, component.getName());
+      assertThat(component.getAnnotations().length)
+          .as(type.getSimpleName() + "." + component.getName() + " is annotated")
+          .isZero();
+      assertThat(component.getAccessor().getAnnotations().length).as(component.getName()).isZero();
     }
   }
 
@@ -98,17 +97,18 @@ class ReflectiveCodecContractTest {
     if (!type.isRecord()) {
       return;
     }
-    assertEquals(
-        1, type.getDeclaredConstructors().length, type.getName() + " has an extra constructor");
+    assertThat(type.getDeclaredConstructors().length)
+        .as(type.getName() + " has an extra constructor")
+        .isOne();
   }
 
   @ParameterizedTest
   @MethodSource("wireTypes")
   void namesEveryComponentInLowerCamelCase(Class<?> type) {
     for (RecordComponent component : components(type)) {
-      assertTrue(
-          component.getName().matches("[a-z][A-Za-z0-9]*"),
-          type.getSimpleName() + "." + component.getName() + " is not lowerCamelCase");
+      assertThat(component.getName())
+          .as(type.getSimpleName() + "." + component.getName() + " is not lowerCamelCase")
+          .matches("[a-z][A-Za-z0-9]*");
     }
   }
 
@@ -122,10 +122,9 @@ class ReflectiveCodecContractTest {
 
   @Test
   void hasNoJacksonOnItsClasspathAtAll() {
-    assertThrows(
-        ClassNotFoundException.class,
-        () -> Class.forName("com.fasterxml.jackson.annotation.JsonProperty"),
-        "shard4j-protocol must not see a JSON library, not even in test scope");
+    assertThatExceptionOfType(ClassNotFoundException.class)
+        .as("shard4j-protocol must not see a JSON library, not even in test scope")
+        .isThrownBy(() -> Class.forName("com.fasterxml.jackson.annotation.JsonProperty"));
   }
 
   private static RecordComponent[] components(Class<?> type) {
@@ -134,29 +133,28 @@ class ReflectiveCodecContractTest {
 
   private static void assertCodecSafe(Type type, String where) {
     if (type instanceof Class<?> raw) {
-      assertTrue(
-          SCALARS.contains(raw) || raw.isEnum() || raw.isRecord(),
-          where + " has type " + raw.getName() + ", which a reflective codec cannot map");
+      assertThat(SCALARS.contains(raw) || raw.isEnum() || raw.isRecord())
+          .as(where + " has type " + raw.getName() + ", which a reflective codec cannot map")
+          .isTrue();
       if (raw.isEnum() || raw.isRecord()) {
-        assertEquals(
-            "com.marvinformatics.shard4j.protocol",
-            raw.getPackageName(),
-            where + " reaches outside the protocol package");
+        assertThat(raw.getPackageName())
+            .as(where + " reaches outside the protocol package")
+            .isEqualTo("com.marvinformatics.shard4j.protocol");
       }
       return;
     }
     if (type instanceof ParameterizedType parameterized) {
       Class<?> raw = (Class<?>) parameterized.getRawType();
-      assertTrue(
-          raw.equals(List.class) || raw.equals(Map.class),
-          where + " has container type " + raw.getName());
+      assertThat(raw.equals(List.class) || raw.equals(Map.class))
+          .as(where + " has container type " + raw.getName())
+          .isTrue();
       Type[] arguments = parameterized.getActualTypeArguments();
       if (raw.equals(Map.class)) {
-        assertEquals(String.class, arguments[0], where + " must be keyed by String");
+        assertThat(arguments[0]).as(where + " must be keyed by String").isEqualTo(String.class);
       }
       assertCodecSafe(arguments[arguments.length - 1], where);
       return;
     }
-    assertTrue(false, where + " has type " + type + ", which a reflective codec cannot map");
+    fail(where + " has type " + type + ", which a reflective codec cannot map");
   }
 }

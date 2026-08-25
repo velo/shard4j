@@ -1,7 +1,7 @@
 package com.marvinformatics.shard4j.protocol;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static com.marvinformatics.shard4j.protocol.HistoryKey.compareNoHistory;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -30,12 +30,13 @@ class NoHistoryOrderTest {
   void pinsTheOrderKeyToItsKnownAnswer(String key, String firstEightBytesHex) {
     long expected = Long.parseUnsignedLong(firstEightBytesHex, 16);
 
-    assertEquals(expected, new HistoryKey(key).orderKey(), key);
+    assertThat(new HistoryKey(key).orderKey()).as(key).isEqualTo(expected);
   }
 
   @Test
   void pinsTheOrderKeyOfTheEmptyKey() {
-    assertEquals(Long.parseUnsignedLong("e3b0c44298fc1c14", 16), new HistoryKey("").orderKey());
+    assertThat(new HistoryKey("").orderKey())
+        .isEqualTo(Long.parseUnsignedLong("e3b0c44298fc1c14", 16));
   }
 
   @Test
@@ -47,7 +48,7 @@ class NoHistoryOrderTest {
     List<HistoryKey> sorted =
         List.of(highest, lowest, middle).stream().sorted(HistoryKey.NO_HISTORY_ORDER).toList();
 
-    assertEquals(List.of(lowest, middle, highest), sorted);
+    assertThat(sorted).containsExactlyElementsOf(List.of(lowest, middle, highest));
   }
 
   @Test
@@ -55,25 +56,25 @@ class NoHistoryOrderTest {
     HistoryKey topBitClear = new HistoryKey("com.example.orders.CartIT#slow1()");
     HistoryKey topBitSet = new HistoryKey("com.example.orders.CartIT#total()");
 
-    assertTrue(topBitSet.orderKey() < 0, "the fixture must exercise the sign bit");
-    assertTrue(
-        HistoryKey.NO_HISTORY_ORDER.compare(topBitClear, topBitSet) < 0,
-        "0x02ee... must sort before 0xd95e...; a signed compare puts them the other way round");
+    assertThat(topBitSet.orderKey() < 0).as("the fixture must exercise the sign bit").isTrue();
+    assertThat(HistoryKey.NO_HISTORY_ORDER.compare(topBitClear, topBitSet) < 0)
+        .as("0x02ee... must sort before 0xd95e...; a signed compare puts them the other way round")
+        .isTrue();
   }
 
   @Test
   void breaksAHashTieLexicographically() {
     long tied = 0x00000000000000ffL;
 
-    assertTrue(HistoryKey.compareNoHistory(tied, "a.B#a()", tied, "a.B#b()") < 0);
-    assertTrue(HistoryKey.compareNoHistory(tied, "a.B#b()", tied, "a.B#a()") > 0);
-    assertEquals(0, HistoryKey.compareNoHistory(tied, "a.B#a()", tied, "a.B#a()"));
+    assertThat(compareNoHistory(tied, "a.B#a()", tied, "a.B#b()")).isNegative();
+    assertThat(compareNoHistory(tied, "a.B#b()", tied, "a.B#a()")).isPositive();
+    assertThat(compareNoHistory(tied, "a.B#a()", tied, "a.B#a()")).isZero();
   }
 
   @Test
   void isConsistentWithEquals() {
     HistoryKey key = new HistoryKey("com.example.orders.CartIT#total()");
 
-    assertEquals(0, HistoryKey.NO_HISTORY_ORDER.compare(key, new HistoryKey(key.value())));
+    assertThat(HistoryKey.NO_HISTORY_ORDER.compare(key, new HistoryKey(key.value()))).isZero();
   }
 }

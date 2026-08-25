@@ -1,7 +1,6 @@
 package com.example.orders;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -15,12 +14,12 @@ class PingResourceIT {
 
   @Test
   void hello() {
-    assertEquals("pong", "pong");
+    assertThat("pong").isEqualTo("pong");
   }
 
   @ParameterizedTest
   @ValueSource(strings = {"alpha", "beta", "gamma"})
   void each(String name) {
-    assertTrue(name.length() > 2);
+    assertThat(name.length()).isGreaterThan(2);
   }
 }

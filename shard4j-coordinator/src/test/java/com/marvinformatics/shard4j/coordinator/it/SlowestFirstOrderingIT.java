@@ -69,12 +69,12 @@ class SlowestFirstOrderingIT {
     List<String> expectedUnknowns = new ArrayList<>(List.of(NEW_A, NEW_B));
     expectedUnknowns.sort(
         Comparator.comparing(
-            (String id) -> HistoryKeys.of(id), HistoryKey.NO_HISTORY_ORDER));
+            HistoryKeys::of, HistoryKey.NO_HISTORY_ORDER));
 
     List<String> expected = new ArrayList<>(expectedUnknowns);
     expected.add(SLOW);
     expected.add(MID);
     expected.add(FAST);
-    assertThat(grantedOrder).isEqualTo(expected);
+    assertThat(grantedOrder).containsExactlyElementsOf(expected);
   }
 }

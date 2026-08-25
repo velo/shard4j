@@ -7,14 +7,14 @@ import java.util.stream.StreamSupport;
 import org.junit.platform.engine.ConfigurationParameters;
 import org.junit.platform.engine.DiscoveryFilter;
 import org.junit.platform.engine.DiscoverySelector;
-import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.EngineDiscoveryRequest;
+import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
+import org.junit.platform.engine.OutputDirectoryCreator;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.TestEngine;
 import org.junit.platform.engine.UniqueId;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
-import org.junit.platform.engine.reporting.OutputDirectoryProvider;
 import org.junit.platform.engine.support.store.Namespace;
 import org.junit.platform.engine.support.store.NamespacedHierarchicalStore;
 
@@ -66,7 +66,7 @@ final class JupiterDelegate {
   TestDescriptor discoverIds(
       List<ExecutionId> ids,
       ConfigurationParameters parameters,
-      OutputDirectoryProvider outputDirectoryProvider) {
+      OutputDirectoryCreator outputDirectoryCreator) {
     UniqueId engineRootId = nestedRootId.removeLastSegment();
     List<DiscoverySelector> selectors =
         ids.stream()
@@ -74,7 +74,7 @@ final class JupiterDelegate {
             .<DiscoverySelector>map(DiscoverySelectors::selectUniqueId)
             .toList();
     return jupiter.discover(
-        new SelectorsRequest(selectors, parameters, outputDirectoryProvider), nestedRootId);
+        new SelectorsRequest(selectors, parameters, outputDirectoryCreator), nestedRootId);
   }
 
   /**
@@ -90,7 +90,7 @@ final class JupiterDelegate {
               descriptor,
               listener,
               outer.getConfigurationParameters(),
-              outer.getOutputDirectoryProvider(),
+              outer.getOutputDirectoryCreator(),
               store));
     }
   }
@@ -120,15 +120,15 @@ final class JupiterDelegate {
     }
 
     @Override
-    public OutputDirectoryProvider getOutputDirectoryProvider() {
-      return delegate.getOutputDirectoryProvider();
+    public OutputDirectoryCreator getOutputDirectoryCreator() {
+      return delegate.getOutputDirectoryCreator();
     }
   }
 
   private record SelectorsRequest(
       List<DiscoverySelector> selectors,
       ConfigurationParameters parameters,
-      OutputDirectoryProvider outputDirectoryProvider)
+      OutputDirectoryCreator outputDirectoryCreator)
       implements EngineDiscoveryRequest {
 
     @Override
@@ -151,8 +151,8 @@ final class JupiterDelegate {
     }
 
     @Override
-    public OutputDirectoryProvider getOutputDirectoryProvider() {
-      return outputDirectoryProvider;
+    public OutputDirectoryCreator getOutputDirectoryCreator() {
+      return outputDirectoryCreator;
     }
   }
 }

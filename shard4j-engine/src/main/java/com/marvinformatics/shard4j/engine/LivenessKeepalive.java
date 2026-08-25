@@ -1,6 +1,8 @@
 package com.marvinformatics.shard4j.engine;
 
 import java.time.Duration;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 
 /**
  * The engine's half of the liveness contract: the coordinator presumes dead any
@@ -10,6 +12,7 @@ import java.time.Duration;
  * pings an empty claim well inside that tolerance so a live shard is never presumed dead
  * and released out of a session that still has work only it will claim.
  */
+@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 final class LivenessKeepalive {
 
   private static final System.Logger log = System.getLogger(LivenessKeepalive.class.getName());
@@ -17,10 +20,6 @@ final class LivenessKeepalive {
   private static final Duration INTERVAL = Duration.ofSeconds(5);
 
   private final Thread thread;
-
-  private LivenessKeepalive(Thread thread) {
-    this.thread = thread;
-  }
 
   static LivenessKeepalive start(Runnable ping) {
     return start(ping, INTERVAL);

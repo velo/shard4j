@@ -17,7 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.experimental.Accessors;
 
 /**
@@ -460,6 +462,7 @@ final class Session {
         : new SessionView.LeaseView(unit.lease.shard(), unit.lease.fence(), unit.lease.expiresAt());
   }
 
+  @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
   private static final class UnitState {
     private final CensusUnit unit;
     private TestState state = TestState.PENDING;
@@ -467,10 +470,6 @@ final class Session {
     private Lease lease;
     private String reason;
     private final List<SessionView.RecordView> records = new ArrayList<>();
-
-    private UnitState(CensusUnit unit) {
-      this.unit = unit;
-    }
   }
 
   record Lease(

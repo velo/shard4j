@@ -11,10 +11,10 @@ import org.junit.platform.engine.ConfigurationParameters;
 import org.junit.platform.engine.DiscoveryFilter;
 import org.junit.platform.engine.DiscoverySelector;
 import org.junit.platform.engine.EngineDiscoveryRequest;
+import org.junit.platform.engine.OutputDirectoryCreator;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.UniqueId;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
-import org.junit.platform.engine.reporting.OutputDirectoryProvider;
 
 class DiscoveredCensusTest {
 
@@ -93,8 +93,8 @@ class DiscoveredCensusTest {
     }
 
     @Override
-    public OutputDirectoryProvider getOutputDirectoryProvider() {
-      return EngineTestHarness.outputDirectoryProvider();
+    public OutputDirectoryCreator getOutputDirectoryCreator() {
+      return EngineTestHarness.outputDirectoryCreator();
     }
   }
 }

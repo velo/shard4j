@@ -105,7 +105,7 @@ public final class DataDirectory implements AutoCloseable {
     Path file = root.resolve("incarnation");
     long previous = 0;
     if (Files.exists(file)) {
-      String content = Files.readString(file, StandardCharsets.UTF_8).trim();
+      String content = Files.readString(file).trim();
       try {
         previous = Long.parseLong(content);
       } catch (NumberFormatException e) {

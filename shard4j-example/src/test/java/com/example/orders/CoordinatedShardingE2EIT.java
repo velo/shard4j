@@ -1,7 +1,6 @@
 package com.example.orders;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
 import static org.assertj.core.groups.Tuple.tuple;
 
 import com.marvinformatics.shard4j.protocol.Outcome;

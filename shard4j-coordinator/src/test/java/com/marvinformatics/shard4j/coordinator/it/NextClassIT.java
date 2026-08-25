@@ -75,7 +75,7 @@ class NextClassIT {
     assertThat(first.className()).isEqualTo(MIXED);
     List<String> expectedUnknowns = new ArrayList<>(List.of(MIXED_NEW_A, MIXED_NEW_B));
     expectedUnknowns.sort(
-        Comparator.comparing((String id) -> HistoryKeys.of(id), HistoryKey.NO_HISTORY_ORDER));
+        Comparator.comparing(HistoryKeys::of, HistoryKey.NO_HISTORY_ORDER));
     List<String> expectedMixed = new ArrayList<>(expectedUnknowns);
     expectedMixed.add(MIXED_SMALL);
     assertThat(first.granted()).extracting(Grant::testId).isEqualTo(expectedMixed);

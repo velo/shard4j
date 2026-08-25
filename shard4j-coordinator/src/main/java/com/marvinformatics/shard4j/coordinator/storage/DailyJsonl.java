@@ -1,6 +1,5 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
-import tools.jackson.core.JacksonException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -18,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.core.JacksonException;
 
 /**
  * Append-only day files, fsynced per append. A crash mid-append truncates only the final

@@ -52,7 +52,7 @@ class ClaimOrderingTest {
     expected.sort(
         (left, right) ->
             HistoryKey.NO_HISTORY_ORDER.compare(HistoryKeys.of(left), HistoryKeys.of(right)));
-    assertThat(ordered).isEqualTo(expected);
+    assertThat(ordered).containsExactlyElementsOf(expected);
   }
 
   @Test

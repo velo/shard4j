@@ -1,9 +1,9 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
+import lombok.experimental.UtilityClass;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
-import lombok.experimental.UtilityClass;
 
 /**
  * The storage layer's own mapper, deliberately separate from the web layer's: on-disk

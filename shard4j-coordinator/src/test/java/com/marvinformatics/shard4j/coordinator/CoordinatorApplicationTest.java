@@ -32,7 +32,7 @@ class CoordinatorApplicationTest {
     assertThat(settings.tenantKey()).isEqualTo("example/orders-service");
     assertThat(settings.tenantSlug()).isEqualTo("orders-service");
     assertThat(settings.secrets()).hasSize(1);
-    assertThat(settings.leaseTtl().toMinutes()).isEqualTo(20);
+    assertThat(settings.leaseTtl()).hasMinutes(20);
     assertThat(settings.maxClaimBatch()).isEqualTo(8);
   }
 }

@@ -3,7 +3,6 @@ package com.marvinformatics.shard4j.coordinator.it;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -19,7 +18,7 @@ import org.testcontainers.containers.output.ToStringConsumer;
 class StartupGuardIT {
 
   @Test
-  void givenNoAcceptedSecret_whenStarting_thenRefusesToStartNamingTheVariable() throws IOException {
+  void givenNoAcceptedSecret_whenStarting_thenRefusesToStartNamingTheVariable() throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "no-secret-data");
     ToStringConsumer logs = new ToStringConsumer();
     GenericContainer<?> unsecured =
@@ -39,7 +38,7 @@ class StartupGuardIT {
   }
 
   @Test
-  void givenASecuredCoordinator_whenCalledWithoutTheSecret_then401ExceptTheHealthProbes() throws IOException {
+  void givenASecuredCoordinator_whenCalledWithoutTheSecret_then401ExceptTheHealthProbes() throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "auth-data");
     GenericContainer<?> secured = CoordinatorContainers.coordinator(dataDir, Map.of());
     try {
@@ -63,7 +62,7 @@ class StartupGuardIT {
   }
 
   @Test
-  void givenPublicReadOptIn_whenAnonymousCallsArrive_thenOnlyTheReadSurfaceIsOpen() throws IOException {
+  void givenPublicReadOptIn_whenAnonymousCallsArrive_thenOnlyTheReadSurfaceIsOpen() throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "public-read-data");
     GenericContainer<?> publicRead =
         CoordinatorContainers.coordinator(dataDir, Map.of("COORDINATOR_PUBLIC_READ", "true"));

@@ -19,7 +19,8 @@
     <!-- The coordinator is a deployed service, not a library on someone else's
          classpath, so it is free to sit on the current LTS. -->
     <maven.compiler.release>${coordinator.compiler.release}</maven.compiler.release>
-    <testcontainers.version>1.21.3</testcontainers.version>
+    <rewrite.java.recipe>${coordinator.rewrite.java.recipe}</rewrite.java.recipe>
+    <testcontainers.version>1.21.4</testcontainers.version>
   </properties>
 
   <dependencyManagement>
@@ -199,4 +200,55 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- The Spring recipes only make sense here: the coordinator is the one module
+         that has ever heard of Spring, and the enforcer rules exist to keep it that
+         way. Adds a third execution to the plugin the parent's `openrewrite` profile
+         already declares. -->
+    <profile>
+      <id>openrewrite</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.openrewrite.maven</groupId>
+            <artifactId>rewrite-maven-plugin</artifactId>
+            <dependencies>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-spring</artifactId>
+                <version>${rewrite-spring.version}</version>
+              </dependency>
+            </dependencies>
+            <executions>
+              <execution>
+                <id>spring</id>
+                <goals>
+                  <goal>runNoFork</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <exportDatatables>true</exportDatatables>
+                  <activeRecipes>
+                    <!-- The version bump inside UpgradeSpringBoot_4_0 is inert with
+                         pom.xml excluded, which is what we want: this build is already
+                         on 4.1.x, so only the code and property migrations apply. -->
+                    <recipe>org.openrewrite.java.spring.boot4.UpgradeSpringBoot_4_0</recipe>
+                    <recipe>org.openrewrite.java.spring.boot4.SpringBootProperties_4_1</recipe>
+                    <recipe>org.openrewrite.java.spring.NoAutowiredOnConstructor</recipe>
+                    <recipe>org.openrewrite.java.spring.NoRequestMappingAnnotation</recipe>
+                    <recipe>org.openrewrite.java.spring.framework.BeanMethodsNotPublic</recipe>
+                    <recipe>org.openrewrite.java.spring.boot3.PreciseBeanType</recipe>
+                  </activeRecipes>
+                  <exclusions>
+                    <exclusion>pom.xml</exclusion>
+                  </exclusions>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

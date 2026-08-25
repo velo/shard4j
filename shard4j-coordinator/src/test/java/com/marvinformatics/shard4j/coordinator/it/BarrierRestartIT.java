@@ -15,7 +15,6 @@ import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionVerdict;
 import com.marvinformatics.shard4j.protocol.SessionView;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -37,7 +36,7 @@ class BarrierRestartIT {
 
   @Test
   void givenAKilledCoordinator_whenRestartedMidBarrier_thenWatermarksDeparturesAndReleasesSurvive()
-      throws IOException {
+      throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "barrier-restart-data");
     String sessionId = UUID.randomUUID().toString();
     String mine = Ids.method(CLASS_NAME, "mine");

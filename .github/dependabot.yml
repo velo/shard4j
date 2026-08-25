@@ -1,0 +1,25 @@
+version: 2
+
+updates:
+  # One entry covers the whole reactor: Dependabot follows <modules> from the root pom,
+  # and every version in this build is declared as a property there.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    ignore:
+      # The one invariant a bot must not cross. shard4j-engine lands on every consumer's
+      # test classpath at release 17, and these two are what set that floor -- a major
+      # bump is where the floor moves. See "Java baselines, and why they differ" in
+      # AGENTS.md; raising either is a deliberate edit with a human on it.
+      - dependency-name: org.junit:junit-bom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: io.github.openfeign:feign-bom
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

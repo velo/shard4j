@@ -48,15 +48,13 @@ class CoordinatorContainers {
     env.put("COORDINATOR_TENANT_SLUG", TENANT_SLUG);
     env.put("COORDINATOR_DATA_DIR", "/data");
     env.putAll(extraEnv);
-    GenericContainer<?> container =
-        new GenericContainer<>(IMAGE)
+    return new GenericContainer<>(IMAGE)
             .withExposedPorts(8080)
             .withEnv(env)
             .withFileSystemBind(dataDir.toAbsolutePath().toString(), "/data", BindMode.READ_WRITE)
             .withCreateContainerCmdModifier(cmd -> cmd.withUser(currentUidGid()))
             .waitingFor(Wait.forHttp("/readyz").forPort(8080).forStatusCode(200))
             .withStartupTimeout(Duration.ofSeconds(90));
-    return container;
   }
 
   /** For the refuse-to-start test: no env defaults beyond what is given. */

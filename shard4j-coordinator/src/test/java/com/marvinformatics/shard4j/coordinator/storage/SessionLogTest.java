@@ -21,7 +21,7 @@ class SessionLogTest {
 
   @Test
   void givenCrashTruncatedFinalLine_whenReplaying_thenTornLineIsSkippedNotFatal()
-      throws IOException {
+      throws Exception {
     // The day file is named from the real UTC clock inside the log, so the test must use
     // the same clock or it breaks at every UTC midnight.
     Instant now = Instant.now();
@@ -37,7 +37,7 @@ class SessionLogTest {
   }
 
   @Test
-  void givenTornTail_whenAppendingAfterReopen_thenNewRecordSurvivesReplay() throws IOException {
+  void givenTornTail_whenAppendingAfterReopen_thenNewRecordSurvivesReplay() throws Exception {
     Instant now = Instant.now();
     try (SessionLog log = new SessionLog(dir)) {
       log.append(completion("[engine:junit-jupiter]/[class:com.example.A]/[method:a()]", now));
@@ -59,7 +59,7 @@ class SessionLogTest {
 
   @Test
   void givenRecordsOlderThanIdleWindow_whenReplaying_thenOnlyTheWindowIsRead()
-      throws IOException {
+      throws Exception {
     Instant now = Instant.parse("2026-08-24T12:00:00Z");
     String line =
         "{\"type\":\"NACK\",\"session\":\"old\",\"shard\":0,\"testId\":\"x\",\"reason\":\"r\","

@@ -1,6 +1,6 @@
 package com.example.orders;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -16,6 +16,6 @@ class CatalogSearchIT {
   @ParameterizedTest
   @ValueSource(strings = {"mug", "shirt", "sticker"})
   void findsProducts(String term) {
-    assertTrue(term.length() > 2);
+    assertThat(term.length()).isGreaterThan(2);
   }
 }

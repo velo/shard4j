@@ -18,6 +18,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
 
@@ -37,6 +39,7 @@ import org.junit.platform.engine.TestDescriptor;
  * reached only after every slot has finished, so a shard is still exactly one unit of
  * quorum arithmetic no matter how many slots it ran.
  */
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 final class ShardLoop {
 
   private static final System.Logger log = System.getLogger(ShardLoop.class.getName());
@@ -69,17 +72,6 @@ final class ShardLoop {
 
   /** One slot's failure stops the others from pulling new classes; they finish what they hold. */
   private final AtomicBoolean stopPulling = new AtomicBoolean();
-
-  ShardLoop(
-      ShardConfiguration configuration,
-      JupiterDelegate jupiter,
-      CoordinatorGateway gateway,
-      ExecutionRequest request) {
-    this.configuration = configuration;
-    this.jupiter = jupiter;
-    this.gateway = gateway;
-    this.request = request;
-  }
 
   void run(DiscoveredCensus census) {
     gateway.register();
@@ -313,7 +305,7 @@ final class ShardLoop {
         jupiter.discoverIds(
             leased,
             request.getConfigurationParameters(),
-            request.getOutputDirectoryProvider());
+            request.getOutputDirectoryCreator());
     UnitOutcomeListener listener =
         new UnitOutcomeListener(
             request.getEngineExecutionListener(),

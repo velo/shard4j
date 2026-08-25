@@ -26,7 +26,7 @@ those, that step is wrong.
 | `shard4j-coordinator` | 25 |
 
 The two published libraries land on **someone else's classpath**. `shard4j-engine` in
-particular ends up on every consumer's test classpath, and it pins JUnit Platform 1.13,
+particular ends up on every consumer's test classpath, and it pins JUnit Platform 1.14,
 whose own floor is 17. Raising the engine to 21 or 25 would gate adoption of a test-sharding
 library on a JDK the adopting project may not run yet -- the cost lands on the consumer,
 not on us, which is exactly the wrong place for it.
@@ -113,6 +113,103 @@ is genuinely impossible -- never for convenience.
 `shard4j-protocol` is pure logic with no I/O, which is why its 258 tests need neither a
 server nor a mock. That is the exception its nature earns, not the pattern to copy: the
 coordinator must be tested as a real running server in Docker.
+
+Assertions are AssertJ. `org.junit.jupiter.api.Assertions` is not a second house style --
+it is what the OpenRewrite profile below converts away from.
+
+## Mechanised best practice
+
+```
+mvn -Popenrewrite verify    # rewrites sources in place, then review the diff
+mvn verify                  # prove the rewrite still compiles and passes
+```
+
+Off by default, like `release`: the everyday build stays fast and offline.
+
+**Run it until it stops changing things.** The AssertJ Refaster rules rewrite in steps --
+`compareTo(x) isLessThan(0)` becomes `isLessThan(x)` only once an earlier rule has turned
+the assertion into the shape the later rule matches. Two passes reached a fixpoint the last
+time; one pass is not proof of anything.
+
+Two constraints are worth knowing before editing the profile:
+
+- **pom.xml is excluded from every execution.** The recipes would otherwise "fix" the two
+  things this build pins on purpose: the per-module `release` indirection and the JUnit
+  Platform floor. Dependency and plugin versions move by human decision, or by Dependabot.
+- **The `test-frameworks` execution must not reach `src/main/java`.** `Assertj` chains in
+  `JUnit5BestPractices`, which chains in the JUnit Platform upgrade; `shard4j-engine`
+  *implements* that Platform SPI in its main sources, so a blanket run rewrites the engine
+  against an API its own classpath may not carry. Everything in the second execution is
+  safe anywhere, which is why only the first one is confined.
+
+### What is wired in, and what was tried and rejected
+
+| Recipe | | Why |
+|---|---|---|
+| `testing.assertj.Assertj` + four `junit5` recipes | in | AssertJ and Jupiter hygiene, test sources only |
+| `migrate.UpgradeToJava17` / `...25` | in | tracks the baselines table via `rewrite.java.recipe` |
+| `spring.boot4.*` | in | coordinator only -- the one module that has heard of Spring |
+| `staticanalysis.CommonStaticAnalysis` | in | import order, diamonds, method refs, `EqualsAvoidsNull` |
+| `security.JavaSecurityBestPractices` | in | finds nothing today; kept as a standing guard |
+| `migrate.lombok.LombokBestPractices` | **out** | see below |
+| `maven.BestPractices` | **out** | see below |
+
+`LombokBestPractices` is not wired in because two of its rules are actively wrong here:
+
+- `UseRequiredArgsConstructor` replaced `CoordinatorCore`'s hand-written constructor with
+  `@RequiredArgsConstructor(onConstructor_ = {@Builder})`, which **deletes
+  `CoordinatorCore.builder()`** -- the build stops compiling. It also deletes the comment
+  explaining why that constructor is hand-written, and reintroduces exactly the hazard the
+  comment warns about: `@RequiredArgsConstructor` takes its parameter order from field
+  declaration order, so a field reorder silently reorders the constructor.
+- `UseLombokGetter` put `@Getter` on a **record component**, where Lombok generates
+  nothing. That one compiles, which is worse: the interface's `default`
+  `getOutputDirectoryCreator()` -- which throws -- would have taken over at runtime.
+
+Three of its constructor rewrites were pure boilerplate removal and were taken by hand
+(`ShardLoop`, `LivenessKeepalive`, `Session.UnitState`). A blanket `@Getter`/`@Setter` pass
+would also fight the `@Accessors(fluent = true)` convention below.
+
+`maven.BestPractices` is the case the pom.xml exclusion was written for, and running it
+confirmed the rule rather than the exception:
+
+- `SortDependencies` alphabetises dependencies, which tears every dependency away from the
+  comment above it explaining why it is there.
+- `RemoveRedundantDependencyVersions` stripped `${lombok.version}` from the coordinator,
+  silently handing Lombok's version to Spring Boot's BOM instead of the property this
+  repository pins on purpose.
+
+## Dependency updates
+
+Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves each one
+and queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the
+gate -- module boundary, forbiddenapis, the coordinated failsafe profile against a live
+coordinator, and the container smoke test all run before anything merges.
+
+Three settings live in the repository rather than the tree. All three are set, and the
+workflow is inert or red without them:
+
+- **"Allow auto-merge"** on the repository, or the merge step fails outright.
+- **`main` requires the three `build.yml` checks.** Without them `--auto` degrades to
+  merging on the spot rather than waiting for green, which removes the safety argument the
+  whole arrangement rests on.
+- **"Allow GitHub Actions to create and approve pull requests"** (Settings -> Actions ->
+  General), or the approve step fails with "GitHub Actions is not permitted to approve pull
+  requests". `github-actions[bot]` approving `dependabot[bot]` is two distinct identities,
+  which is what makes it permissible; a token approving its own PR still would not be.
+
+**`github_actions` updates are approved but not queued, and that is not a bug to fix.**
+They edit files under `.github/workflows/`, and GitHub refuses any `GITHUB_TOKEN` merge that
+does -- *"refusing to allow a GitHub App to create or update workflow ... without
+`workflows` permission"*. That scope exists only on a PAT, and this repository does not use
+one; `build.yml` makes the same choice for the GHCR push. Merge those by hand. Reaching for
+a PAT to close the gap would put a long-lived credential with write access to the workflows
+themselves into repository secrets, which buys a little convenience for a lot of blast
+radius.
+
+`org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
+They are what set the engine's release-17 floor, and a bot must not be the thing that moves
+it.
 
 ## Repository hygiene
 
