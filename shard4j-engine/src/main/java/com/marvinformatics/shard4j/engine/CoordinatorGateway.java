@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.engine;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -48,10 +49,16 @@ class CoordinatorGateway {
 
   private static final System.Logger log = System.getLogger(CoordinatorGateway.class.getName());
 
-  private static final ObjectMapper JSON =
+  // Unknown response fields are ignored, never fatal: engines and the coordinator do not
+  // upgrade in lockstep -- the coordinator deploys first and consumers keep running the
+  // engine version they pinned -- so every wire addition the coordinator starts sending
+  // (Grant.probe was the first) must decode cleanly on an engine that has never heard of
+  // it. Package-private so the tolerance is pinned by test against this exact mapper.
+  static final ObjectMapper JSON =
       JsonMapper.builder()
           .addModule(new JavaTimeModule())
           .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+          .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
           .build();
 
   private final CoordinatorClient api;
