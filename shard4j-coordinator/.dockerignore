@@ -1,0 +1,3 @@
+*
+!Dockerfile
+!target/shard4j-coordinator-*-app.jar
