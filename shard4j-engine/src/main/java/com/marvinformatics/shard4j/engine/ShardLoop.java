@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
@@ -329,7 +330,7 @@ final class ShardLoop {
     List<String> driftedInvocations = new ArrayList<>();
     List<String> unexplainable = new ArrayList<>();
     for (Grant grant : unexplained) {
-      boolean invocation = grant.testId().contains("/[test-template-invocation:");
+      boolean invocation = invocationShaped(grant.testId());
       if (invocation && grant.probe()) {
         nacks.add(
             new NackRequest.NackedLease(
@@ -493,5 +494,14 @@ final class ShardLoop {
   private static String classNameOf(String unitId) {
     int start = unitId.indexOf("[class:") + "[class:".length();
     return unitId.substring(start, unitId.indexOf(']', start));
+  }
+
+  /** The one grammar decides; a shape it cannot parse falls to the unexplained arm. */
+  private static boolean invocationShaped(String unitId) {
+    try {
+      return CensusUnit.parse(unitId).invocation() != null;
+    } catch (IllegalArgumentException notClaimable) {
+      return false;
+    }
   }
 }

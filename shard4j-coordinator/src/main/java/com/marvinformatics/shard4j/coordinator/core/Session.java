@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;

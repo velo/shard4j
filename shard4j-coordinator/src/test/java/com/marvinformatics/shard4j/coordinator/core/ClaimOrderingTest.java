@@ -2,6 +2,7 @@ package com.marvinformatics.shard4j.coordinator.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,7 +18,7 @@ class ClaimOrderingTest {
   }
 
   private static CensusUnit unit(String method) {
-    return HistoryKeys.parse(id(method));
+    return CensusUnit.parse(id(method));
   }
 
   private static List<String> orderedIds(
@@ -49,12 +50,12 @@ class ClaimOrderingTest {
   void noHistoryMeansPinnedHashOrder() {
     List<String> ids = List.of(id("aaa"), id("bbb"), id("ccc"), id("ddd"));
     List<String> ordered =
-        orderedIds(ids.stream().map(HistoryKeys::parse).toList(), key -> OptionalLong.empty());
+        orderedIds(ids.stream().map(CensusUnit::parse).toList(), key -> OptionalLong.empty());
 
     List<String> expected = new ArrayList<>(ids);
     expected.sort(
         (left, right) ->
-            HistoryKey.NO_HISTORY_ORDER.compare(HistoryKeys.of(left), HistoryKeys.of(right)));
+            HistoryKey.NO_HISTORY_ORDER.compare(CensusUnit.historyKeyOf(left), CensusUnit.historyKeyOf(right)));
     assertThat(ordered).containsExactlyElementsOf(expected);
   }
 
@@ -74,8 +75,8 @@ class ClaimOrderingTest {
     String template =
         "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
             + "/[test-template:rows(java.lang.String)]";
-    CensusUnit measured = HistoryKeys.parse(template + "/[test-template-invocation:#1]");
-    CensusUnit probe = HistoryKeys.parse(template + "/[test-template-invocation:#2]");
+    CensusUnit measured = CensusUnit.parse(template + "/[test-template-invocation:#1]");
+    CensusUnit probe = CensusUnit.parse(template + "/[test-template-invocation:#2]");
     List<CensusUnit> ordered =
         ClaimOrdering.order(
             List.of(probe, measured, unit("mystery"), unit("known")),

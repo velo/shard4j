@@ -81,45 +81,45 @@ class DurationStoreTest {
   @Test
   void invocationPlanComesOnlyFromACompleteBreakdown() {
     DurationStore store = store();
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 50);
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 50);
     assertThat(store.invocationPlan(KEY)).isEmpty();
 
     store.markInvocationsComplete(KEY, "session-a");
-    assertThat(store.invocationPlan(KEY)).containsExactly("#1", "#2");
+    assertThat(store.invocationPlan(KEY)).containsExactly(1, 2);
   }
 
   @Test
   void planPositionsSortNumericallyNotLexicographically() {
     DurationStore store = store();
     for (int position = 1; position <= 11; position++) {
-      store.recordInvocation(KEY, "session-a", "#" + position, 10);
+      store.recordInvocation(KEY, "session-a", position, 10);
     }
     store.markInvocationsComplete(KEY, "session-a");
-    assertThat(store.invocationPlan(KEY).get(1)).isEqualTo("#2");
-    assertThat(store.invocationPlan(KEY).get(10)).isEqualTo("#11");
+    assertThat(store.invocationPlan(KEY).get(1)).isEqualTo(2);
+    assertThat(store.invocationPlan(KEY).get(10)).isEqualTo(11);
   }
 
   @Test
   void newestCompleteBreakdownWinsAndAnIncompleteNewerOneDoesNotHideIt() {
     DurationStore store = store();
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 50);
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 50);
     store.markInvocationsComplete(KEY, "session-a");
     // The newer session saw only one row finish; trusting it would drop #2 silently.
-    store.recordInvocation(KEY, "session-b", "#1", 41);
-    assertThat(store.invocationPlan(KEY)).containsExactly("#1", "#2");
+    store.recordInvocation(KEY, "session-b", 1, 41);
+    assertThat(store.invocationPlan(KEY)).containsExactly(1, 2);
   }
 
   @Test
   void invocationEstimateIsPerPositionAndTheMethodEstimateIsTheirSum() {
     DurationStore store = store();
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 60);
-    store.recordInvocation(KEY, "session-b", "#1", 50);
-    assertThat(store.invocationEstimate(KEY, "#1")).hasValue(45L);
-    assertThat(store.invocationEstimate(KEY, "#2")).hasValue(60L);
-    assertThat(store.invocationEstimate(KEY, "#9")).isEmpty();
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 60);
+    store.recordInvocation(KEY, "session-b", 1, 50);
+    assertThat(store.invocationEstimate(KEY, 1)).hasValue(45L);
+    assertThat(store.invocationEstimate(KEY, 2)).hasValue(60L);
+    assertThat(store.invocationEstimate(KEY, 9)).isEmpty();
     // An entry accreted from invocations carries their sum as the method-level figure.
     assertThat(store.estimate(KEY)).hasValue(75L);
   }
@@ -128,37 +128,37 @@ class DurationStoreTest {
   void attachingRowsToAWholeMethodEntryNeverOverwritesItsMeasuredTotal() {
     DurationStore store = store();
     store.recordPassed(KEY, "session-a", 220, false);
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 50);
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 50);
     assertThat(store.estimate(KEY)).hasValue(220L);
     store.markInvocationsComplete(KEY, "session-a");
-    assertThat(store.invocationPlan(KEY)).containsExactly("#1", "#2");
+    assertThat(store.invocationPlan(KEY)).containsExactly(1, 2);
   }
 
   @Test
   void droppingAVanishedPositionRemovesItFromEveryWindowEntry() {
     DurationStore store = store();
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 50);
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 50);
     store.markInvocationsComplete(KEY, "session-a");
-    store.dropInvocation(KEY, "#2");
-    assertThat(store.invocationPlan(KEY)).containsExactly("#1");
-    assertThat(store.invocationEstimate(KEY, "#2")).isEmpty();
+    store.dropInvocation(KEY, 2);
+    assertThat(store.invocationPlan(KEY)).containsExactly(1);
+    assertThat(store.invocationEstimate(KEY, 2)).isEmpty();
     assertThat(store.estimate(KEY)).hasValue(40L);
   }
 
   @Test
   void breakdownSurvivesTheSnapshotRoundTrip() {
     DurationStore store = store();
-    store.recordInvocation(KEY, "session-a", "#1", 40);
-    store.recordInvocation(KEY, "session-a", "#2", 50);
+    store.recordInvocation(KEY, "session-a", 1, 40);
+    store.recordInvocation(KEY, "session-a", 2, 50);
     store.markInvocationsComplete(KEY, "session-a");
     store.saveSnapshot();
 
     DurationStore reloaded = store();
     assertThat(reloaded.loadSnapshot()).isTrue();
-    assertThat(reloaded.invocationPlan(KEY)).containsExactly("#1", "#2");
-    assertThat(reloaded.invocationEstimate(KEY, "#2")).hasValue(50L);
+    assertThat(reloaded.invocationPlan(KEY)).containsExactly(1, 2);
+    assertThat(reloaded.invocationEstimate(KEY, 2)).hasValue(50L);
   }
 
   @Test
@@ -174,7 +174,7 @@ class DurationStoreTest {
             invocationRow(template + "/[test-template-invocation:#1]", Outcome.PASSED, 40),
             invocationRow(template + "/[test-template-invocation:#2]", Outcome.SKIPPED, 0),
             invocationRow(template + "/[test-template-invocation:#3]", Outcome.PASSED, 50)));
-    assertThat(store.invocationPlan(key)).containsExactly("#1", "#2", "#3");
+    assertThat(store.invocationPlan(key)).containsExactly(1, 2, 3);
     assertThat(store.estimate(key)).hasValue(90L);
   }
 
@@ -192,7 +192,7 @@ class DurationStoreTest {
             unitRow(template + "/[test-template-invocation:#1]", Outcome.PASSED, 40),
             unitRow(template + "/[test-template-invocation:#2]", Outcome.PASSED, 50)));
     assertThat(store.invocationPlan(key)).isEmpty();
-    assertThat(store.invocationEstimate(key, "#1")).hasValue(40L);
+    assertThat(store.invocationEstimate(key, 1)).hasValue(40L);
     assertThat(store.estimate(key)).hasValue(90L);
   }
 

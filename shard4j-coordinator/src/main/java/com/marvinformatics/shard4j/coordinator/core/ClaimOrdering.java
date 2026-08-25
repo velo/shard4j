@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.ArrayList;
 import java.util.Comparator;

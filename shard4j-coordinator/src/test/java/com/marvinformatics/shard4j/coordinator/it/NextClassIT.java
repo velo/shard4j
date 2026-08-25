@@ -2,7 +2,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.marvinformatics.shard4j.coordinator.core.HistoryKeys;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
@@ -75,7 +75,7 @@ class NextClassIT {
     assertThat(first.className()).isEqualTo(MIXED);
     List<String> expectedUnknowns = new ArrayList<>(List.of(MIXED_NEW_A, MIXED_NEW_B));
     expectedUnknowns.sort(
-        Comparator.comparing(HistoryKeys::of, HistoryKey.NO_HISTORY_ORDER));
+        Comparator.comparing(CensusUnit::historyKeyOf, HistoryKey.NO_HISTORY_ORDER));
     List<String> expectedMixed = new ArrayList<>(expectedUnknowns);
     expectedMixed.add(MIXED_SMALL);
     assertThat(first.granted()).extracting(Grant::testId).isEqualTo(expectedMixed);

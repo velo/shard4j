@@ -2,7 +2,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.marvinformatics.shard4j.coordinator.core.HistoryKeys;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.Grant;
@@ -69,7 +69,7 @@ class SlowestFirstOrderingIT {
     List<String> expectedUnknowns = new ArrayList<>(List.of(NEW_A, NEW_B));
     expectedUnknowns.sort(
         Comparator.comparing(
-            HistoryKeys::of, HistoryKey.NO_HISTORY_ORDER));
+            CensusUnit::historyKeyOf, HistoryKey.NO_HISTORY_ORDER));
 
     List<String> expected = new ArrayList<>(expectedUnknowns);
     expected.add(SLOW);

@@ -1,7 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
-import com.marvinformatics.shard4j.coordinator.core.CensusUnit;
-import com.marvinformatics.shard4j.coordinator.core.HistoryKeys;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import java.io.IOException;
@@ -12,7 +11,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -23,8 +21,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 
@@ -40,7 +36,7 @@ import tools.jackson.core.type.TypeReference;
  * the clamp are discarded so one runaway or injected figure cannot dominate ordering.
  *
  * <p>Keys stay at method level even for invocation data: an entry's {@code invocations}
- * map ({@code #N} to duration) is a value inside the method-keyed record, never a key of
+ * map (position to duration) is a value inside the method-keyed record, never a key of
  * its own -- positions are unstable across commits, so they may steer distribution but
  * must never become an address. A breakdown is trusted as a distribution plan only when
  * its session is marked complete, meaning every invocation the method had was seen to
@@ -68,9 +64,9 @@ public final class DurationStore {
       boolean firstOnShard,
       boolean fromInvocations,
       boolean invocationsComplete,
-      Map<String, Long> invocations) {
+      Map<Integer, Long> invocations) {
 
-    Map<String, Long> invocationsOrEmpty() {
+    Map<Integer, Long> invocationsOrEmpty() {
       return invocations == null ? Map.of() : invocations;
     }
   }
@@ -103,7 +99,7 @@ public final class DurationStore {
    * running duration sum -- a whole-method measurement is never overwritten by parts.
    */
   public synchronized void recordInvocation(
-      HistoryKey key, String session, String position, long durationMs) {
+      HistoryKey key, String session, int position, long durationMs) {
     if (outOfRange(key, durationMs)) {
       return;
     }
@@ -115,7 +111,7 @@ public final class DurationStore {
       trimWindow(entries);
     } else {
       Entry entry = entries.get(index);
-      Map<String, Long> merged = new LinkedHashMap<>(entry.invocationsOrEmpty());
+      Map<Integer, Long> merged = new LinkedHashMap<>(entry.invocationsOrEmpty());
       merged.put(position, durationMs);
       long total =
           entry.fromInvocations()
@@ -166,7 +162,7 @@ public final class DurationStore {
    * exactly as a method never seen before does. Only the newest complete entry is
    * consulted: an older one is staler truth, not a fallback.
    */
-  public synchronized List<String> invocationPlan(HistoryKey key) {
+  public synchronized List<Integer> invocationPlan(HistoryKey key) {
     List<Entry> entries = byKey.get(key.value());
     if (entries == null) {
       return List.of();
@@ -174,16 +170,14 @@ public final class DurationStore {
     for (int i = entries.size() - 1; i >= 0; i--) {
       Entry entry = entries.get(i);
       if (entry.invocationsComplete()) {
-        return entry.invocationsOrEmpty().keySet().stream()
-            .sorted(Comparator.comparingInt(DurationStore::positionIndex))
-            .toList();
+        return entry.invocationsOrEmpty().keySet().stream().sorted().toList();
       }
     }
     return List.of();
   }
 
   /** Median of the position's recorded durations across the window, when any exist. */
-  public synchronized OptionalLong invocationEstimate(HistoryKey key, String position) {
+  public synchronized OptionalLong invocationEstimate(HistoryKey key, int position) {
     List<Entry> entries = byKey.get(key.value());
     if (entries == null) {
       return OptionalLong.empty();
@@ -200,7 +194,7 @@ public final class DurationStore {
    * A shard proved the position no longer exists (a vanished non-probe invocation), so it
    * is dropped from every window entry: the next session must not hand it out again.
    */
-  public synchronized void dropInvocation(HistoryKey key, String position) {
+  public synchronized void dropInvocation(HistoryKey key, int position) {
     List<Entry> entries = byKey.get(key.value());
     if (entries == null) {
       return;
@@ -210,7 +204,7 @@ public final class DurationStore {
       if (!entry.invocationsOrEmpty().containsKey(position)) {
         continue;
       }
-      Map<String, Long> remaining = new LinkedHashMap<>(entry.invocations());
+      Map<Integer, Long> remaining = new LinkedHashMap<>(entry.invocations());
       remaining.remove(position);
       long total =
           entry.fromInvocations()
@@ -332,7 +326,7 @@ public final class DurationStore {
       }
       CensusUnit unit;
       try {
-        unit = HistoryKeys.parse(record.testId());
+        unit = CensusUnit.parse(record.testId());
       } catch (IllegalArgumentException e) {
         log.warn("Skipping history record with unusable id: {}", e.getMessage());
         continue;
@@ -393,9 +387,5 @@ public final class DurationStore {
     return size % 2 == 1
         ? sorted.get(size / 2)
         : (sorted.get(size / 2 - 1) + sorted.get(size / 2)) / 2;
-  }
-
-  static int positionIndex(String position) {
-    return Integer.parseInt(position.substring(1));
   }
 }

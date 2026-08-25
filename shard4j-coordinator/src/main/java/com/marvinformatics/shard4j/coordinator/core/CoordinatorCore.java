@@ -6,6 +6,7 @@ import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
 import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
 import com.marvinformatics.shard4j.protocol.BarrierRequest;
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -296,34 +297,26 @@ public final class CoordinatorCore {
   }
 
   private List<ClaimableUnit> expand(String censusId) {
-    CensusUnit whole = HistoryKeys.parse(censusId);
+    CensusUnit whole = CensusUnit.parse(censusId);
     if (!whole.template()) {
       return List.of(new ClaimableUnit(whole, false));
     }
-    List<String> plan = durations.invocationPlan(whole.historyKey());
+    List<Integer> plan = durations.invocationPlan(whole.historyKey());
     if (plan.isEmpty()) {
       return List.of(new ClaimableUnit(whole, false));
     }
     List<ClaimableUnit> expanded = new ArrayList<>();
-    for (String position : plan) {
-      expanded.add(new ClaimableUnit(invocationUnit(censusId, position), false));
+    for (int position : plan) {
+      expanded.add(new ClaimableUnit(whole.atPosition(position), false));
     }
-    int pastThePlan = positionIndexOf(plan.get(plan.size() - 1)) + 1;
-    expanded.add(new ClaimableUnit(invocationUnit(censusId, "#" + pastThePlan), true));
+    int pastThePlan = plan.get(plan.size() - 1) + 1;
+    expanded.add(new ClaimableUnit(whole.atPosition(pastThePlan), true));
     log.info(
         "Expanding {} into {} invocation unit(s) plus a cardinality probe at #{}",
         censusId,
         plan.size(),
         pastThePlan);
     return expanded;
-  }
-
-  private static CensusUnit invocationUnit(String censusId, String position) {
-    return HistoryKeys.parse(censusId + "/[test-template-invocation:" + position + "]");
-  }
-
-  private static int positionIndexOf(String position) {
-    return Integer.parseInt(position.substring(1));
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {
@@ -755,7 +748,7 @@ public final class CoordinatorCore {
       }
       boolean everyRowUsable = true;
       for (InvocationRecord row : request.invocations()) {
-        String position = positionOfRecordId(row.testId());
+        Integer position = positionOfRecordId(row.testId());
         if (position == null) {
           everyRowUsable = false;
           continue;
@@ -780,8 +773,8 @@ public final class CoordinatorCore {
     if (request.outcome() == Outcome.PASSED
         && request.pass() == Pass.MAIN
         && session.isProbe(request.testId())) {
-      int next = positionIndexOf(unit.invocation()) + 1;
-      session.addProbe(censusId, invocationUnit(censusId, "#" + next));
+      int next = unit.invocation() + 1;
+      session.addProbe(censusId, CensusUnit.parse(censusId).atPosition(next));
       log.info(
           "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
           sessionId,
@@ -790,9 +783,9 @@ public final class CoordinatorCore {
     }
   }
 
-  private static String positionOfRecordId(String recordId) {
+  private static Integer positionOfRecordId(String recordId) {
     try {
-      return HistoryKeys.parse(recordId).invocation();
+      return CensusUnit.parse(recordId).invocation();
     } catch (IllegalArgumentException e) {
       return null;
     }
@@ -846,14 +839,15 @@ public final class CoordinatorCore {
         throw new ProtocolViolationException(
             "Execution ids must be rooted at " + REQUIRED_ID_PREFIX + "...]: " + testId);
       }
-      if (testId.contains("[test-template-invocation:")) {
-        throw new ProtocolViolationException(
-            "An invocation id is a record id, never a lease unit: " + testId);
-      }
+      CensusUnit unit;
       try {
-        HistoryKeys.of(testId);
+        unit = CensusUnit.parse(testId);
       } catch (IllegalArgumentException e) {
         throw new ProtocolViolationException(e.getMessage());
+      }
+      if (unit.invocation() != null) {
+        throw new ProtocolViolationException(
+            "An invocation id is a record id, never a lease unit: " + testId);
       }
       if (!seen.add(testId)) {
         throw new ProtocolViolationException("Duplicate lease unit in census: " + testId);
