@@ -70,6 +70,52 @@ before the container finishes. That last shape leaves the verdict all-PASSED wit
 summary failure as the only surviving signal, and `testFailureIgnore` deletes exactly
 that signal. This is a rule, not a preference.
 
+### JUnit Platform version alignment
+
+The engine is compiled against a single JUnit Platform minor and **requires a matching
+minor on the consumer's test classpath**. This is not a pin we chose for comfort: the
+Platform changed `ExecutionRequest.create` and `EngineDiscoveryRequest`'s
+output-directory accessors binary-incompatibly in three consecutive minors --
+
+| Platform | how an engine constructs a nested `ExecutionRequest` |
+| --- | --- |
+| 1.12 | `create(descriptor, listener, config, OutputDirectoryProvider)` |
+| 1.13 | `create(descriptor, listener, config, OutputDirectoryProvider, store)` |
+| 1.14 | `create(descriptor, listener, config, OutputDirectoryCreator, store)` |
+
+-- so no single compiled artifact spans them. A mismatch surfaces as JUnit's own
+`OutputDirectoryProvider not available` / `OutputDirectoryCreator not available`
+exception, thrown from a `default` method on the interface whose accessor this engine did
+not override, and it names the cause: *"probably due to unaligned versions of the
+junit-platform-engine and junit-platform-launcher jars on the classpath/module
+path."*. The Platform
+assumes engine and launcher move together; shard4j is an engine, so it inherits that
+assumption.
+
+Consumers on a framework BOM (Quarkus, Spring Boot) frequently resolve an older Platform
+than the one shard4j targets, and the framework BOM wins unless told otherwise. Import
+`junit-bom` **ahead of** the framework BOM in `<dependencyManagement>`:
+
+```xml
+<dependency>
+  <groupId>org.junit</groupId>
+  <artifactId>junit-bom</artifactId>
+  <version>5.14.4</version>
+  <type>pom</type>
+  <scope>import</scope>
+</dependency>
+```
+
+Any `5.14.x` works -- only the **minor** has to match, and patch bumps within it keep the
+API shape (which is why dependabot still lets those through). Check `pom.xml` for the
+version this release actually builds against.
+
+Surefire cannot settle this for you. `surefire-junit-platform` is a *plugin*-classpath
+artifact and manages nothing on the test classpath; it also lags -- surefire 3.5.6
+declares `<versions.junit5>5.12.2</versions.junit5>`, older than either version above.
+What surefire does do is align `junit-platform-launcher` to whatever Platform it finds on
+the test classpath, which is why fixing the test classpath fixes the whole run.
+
 Configuration is read from JUnit configuration parameters (which the launcher backs with
 system properties) first, then environment variables (`shard.foo.bar` maps to
 `SHARD_FOO_BAR`):

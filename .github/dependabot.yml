@@ -9,12 +9,23 @@ updates:
       interval: daily
     open-pull-requests-limit: 10
     ignore:
-      # The one invariant a bot must not cross. shard4j-engine lands on every consumer's
-      # test classpath at release 17, and these two are what set that floor -- a major
-      # bump is where the floor moves. See "Java baselines, and why they differ" in
-      # AGENTS.md; raising either is a deliberate edit with a human on it.
+      # shard4j-engine lands on every consumer's test classpath, so anything that moves
+      # its floor is an adoption decision, not a dependency update. Both entries below
+      # exist to keep a bot from making that decision -- but they draw the line at
+      # different levels, deliberately.
+      #
+      # JUnit Platform: patch-only. The Platform has changed the API this engine builds on
+      # binary-incompatibly on every recent minor, so a *minor* bump moves the floor for
+      # every consumer -- which is how 0.2.0 shipped requiring 1.14 without anyone choosing
+      # to (#31). Patches within a minor keep the API shape, so those still flow. The
+      # signature history and the consumer-side fix live in one place: "JUnit Platform
+      # version alignment" in README.md.
       - dependency-name: org.junit:junit-bom
-        update-types: ["version-update:semver-major"]
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      # Feign: major-only. It sets the release-17 baseline but does not break across
+      # minors. See "Java baselines, and why they differ" in AGENTS.md.
       - dependency-name: io.github.openfeign:feign-bom
         update-types: ["version-update:semver-major"]
 
