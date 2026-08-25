@@ -14,6 +14,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import lombok.experimental.UtilityClass;
 import org.testcontainers.containers.BindMode;
@@ -43,21 +44,26 @@ class CoordinatorContainer {
                       .build());
 
   GenericContainer<?> start() {
+    return start(Map.of());
+  }
+
+  GenericContainer<?> start(Map<String, String> extraEnvironment) {
     Path dataDir;
     try {
       dataDir = Files.createTempDirectory(Path.of("target"), "engine-it-data");
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
+    Map<String, String> environment = new HashMap<>();
+    environment.put("COORDINATOR_SECRETS", SECRET);
+    environment.put("COORDINATOR_TENANT_KEY", "example/orders-service");
+    environment.put("COORDINATOR_TENANT_SLUG", "orders-service");
+    environment.put("COORDINATOR_DATA_DIR", "/data");
+    environment.putAll(extraEnvironment);
     GenericContainer<?> container =
         new GenericContainer<>(IMAGE)
             .withExposedPorts(8080)
-            .withEnv(
-                Map.of(
-                    "COORDINATOR_SECRETS", SECRET,
-                    "COORDINATOR_TENANT_KEY", "example/orders-service",
-                    "COORDINATOR_TENANT_SLUG", "orders-service",
-                    "COORDINATOR_DATA_DIR", "/data"))
+            .withEnv(environment)
             .withFileSystemBind(dataDir.toAbsolutePath().toString(), "/data", BindMode.READ_WRITE)
             .withCreateContainerCmdModifier(cmd -> cmd.withUser(currentUidGid()))
             .waitingFor(Wait.forHttp("/readyz").forPort(8080).forStatusCode(200))

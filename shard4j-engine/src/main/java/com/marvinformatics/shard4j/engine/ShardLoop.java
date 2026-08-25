@@ -121,23 +121,42 @@ final class ShardLoop {
   }
 
   /**
-   * Sweeps the census class by class, one batched claim per class, until a full sweep
-   * grants nothing -- the pull model's terminal state for this shard. An empty grant skips
-   * the class outright: no nested discovery, no {@code @BeforeAll}, no class initialiser.
+   * Sweeps the census class by class, draining each class before moving on, until a full
+   * sweep grants nothing -- the pull model's terminal state for this shard. An empty
+   * first grant skips the class outright: no nested discovery, no {@code @BeforeAll}, no
+   * class initialiser.
    */
   private void claimAndRunUntilDrained(DiscoveredCensus census) {
     boolean grantedAnything = true;
     while (grantedAnything) {
       grantedAnything = false;
       for (DiscoveredCensus.ClassUnits entry : census.classes()) {
-        List<Grant> grants =
-            gateway.claim(entry.className(), entry.units().stream().map(ExecutionId::value).toList());
-        if (grants.isEmpty()) {
+        List<Grant> drained = drainClass(entry);
+        if (drained.isEmpty()) {
           continue;
         }
         grantedAnything = true;
-        runBatch(grants);
+        runBatch(drained);
       }
+    }
+  }
+
+  /**
+   * Claims the class until it yields nothing, so everything this shard will run there
+   * shares one nested execution -- one class instance, one {@code @BeforeAll} -- instead
+   * of paying the class setup once per capped claim batch, with other classes interleaved
+   * between the payments. Still the pull model: each claim is a fresh ask, and whatever
+   * other shards took in between simply is not granted here.
+   */
+  private List<Grant> drainClass(DiscoveredCensus.ClassUnits entry) {
+    List<String> candidates = entry.units().stream().map(ExecutionId::value).toList();
+    List<Grant> drained = new ArrayList<>();
+    while (true) {
+      List<Grant> grants = gateway.claim(entry.className(), candidates);
+      if (grants.isEmpty()) {
+        return drained;
+      }
+      drained.addAll(grants);
     }
   }
 
