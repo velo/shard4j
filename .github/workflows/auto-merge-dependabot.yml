@@ -1,0 +1,41 @@
+name: Dependabot auto-merge
+
+# Blanket auto-merge is only defensible because `build.yml` is the gate: it runs the
+# enforced module boundary, forbiddenapis over the engine's bytecode, the coordinated
+# failsafe profile against a live coordinator, and the container smoke test. A dependency
+# that breaks any of those never reaches this queue.
+#
+# Two repository settings make this work, and neither lives in the tree: "Allow auto-merge"
+# must be on, and main must require the build.yml checks. Without the required checks,
+# `--auto` degrades to merging on the spot.
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'velo/shard4j'
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Auto-approve
+        uses: hmarr/auto-approve-action@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Squash, to match the single-line history this repository keeps.
+      - name: Enable auto-merge
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
