@@ -5,11 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,18 +59,9 @@ class AbandonedLeasesIT {
   void givenATransportDeathMidPass_whenTheLoopDies_thenOutstandingLeasesAreNackedNotLeftToTheTtl() {
     String sessionId = UUID.randomUUID().toString();
     ShardConfiguration configuration =
-        new ShardConfiguration(
-            true,
-            CoordinatorContainer.urlOf(coordinator),
-            CoordinatorContainer.SECRET,
-            sessionId,
-            0,
-            Pass.MAIN,
-            1,
-            Map.of(),
-            Duration.ofSeconds(30),
-            null,
-            true);
+        ShardConfigurationBuilder.coordinatedShard(
+            CoordinatorContainer.urlOf(coordinator), sessionId)
+        .build();
     // The ghost never produces an outcome, so its lease is still outstanding when the
     // second open ask dies -- the exact state a mid-pass abnormal exit strands.
     DiscoveredCensus census =

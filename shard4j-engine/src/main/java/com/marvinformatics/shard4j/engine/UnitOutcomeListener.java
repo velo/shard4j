@@ -30,6 +30,14 @@ import org.junit.platform.engine.reporting.ReportEntry;
  * it, sailing past any "did execution begin" check. Both must land as {@code ABORTED}
  * with a reason, or the unit sits leased for the full TTL and the session ends
  * INCOMPLETE naming no cause.
+ *
+ * <p>Each nested execution gets its own instance, so concurrent class drains never share
+ * one -- but a consumer who turns on Jupiter's own parallel execution makes a single
+ * nested execution deliver events from many threads at once. The engine tolerates that:
+ * the stateful callbacks are synchronised, which keeps finalisation exactly-once per unit
+ * where a racing check-then-put could report a unit twice or lose it entirely -- and
+ * under a coverage verdict a lost outcome is the exact failure class this engine exists
+ * to delete.
  */
 final class UnitOutcomeListener implements EngineExecutionListener {
 
@@ -57,13 +65,16 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     this.onUnitComplete = onUnitComplete;
   }
 
+  // Deliberately not synchronized, here and in reportingEntryPublished: both are
+  // stateless pass-throughs touching none of the maps above, and serialising them would
+  // throttle a consumer's parallel nested execution for nothing.
   @Override
   public void dynamicTestRegistered(TestDescriptor descriptor) {
     downstream.dynamicTestRegistered(descriptor);
   }
 
   @Override
-  public void executionStarted(TestDescriptor descriptor) {
+  public synchronized void executionStarted(TestDescriptor descriptor) {
     startedAtNanos.put(descriptor.getUniqueId(), System.nanoTime());
     if (forward(descriptor)) {
       downstream.executionStarted(descriptor);
@@ -71,7 +82,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   }
 
   @Override
-  public void executionSkipped(TestDescriptor descriptor, String reason) {
+  public synchronized void executionSkipped(TestDescriptor descriptor, String reason) {
     String effective = orUnexplained(reason, "skipped");
     String wireId = wireIdOf(descriptor);
     if (leasedUnits.contains(wireId)) {
@@ -89,7 +100,8 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   }
 
   @Override
-  public void executionFinished(TestDescriptor descriptor, TestExecutionResult result) {
+  public synchronized void executionFinished(
+      TestDescriptor descriptor, TestExecutionResult result) {
     long durationMs = elapsedMs(descriptor);
     String wireId = wireIdOf(descriptor);
     if (leasedUnits.contains(wireId)) {

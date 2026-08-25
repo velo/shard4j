@@ -49,6 +49,7 @@ class ShardConfigurationTest {
   void givenEnabledWithEverySetting_whenResolving_thenAllFieldsArrive() {
     Map<String, String> parameters = completeParameters();
     parameters.put(ShardConfiguration.ATTEMPT, "2");
+    parameters.put(ShardConfiguration.CONCURRENCY, "2");
     parameters.put(ShardConfiguration.RETRY_BUDGET, "90");
     parameters.put(ShardConfiguration.DEADLINE, "2026-08-25T10:15:30Z");
     parameters.put(ShardConfiguration.ABORT_GUARD, "false");
@@ -63,10 +64,38 @@ class ShardConfigurationTest {
     assertThat(configuration.shardIndex()).isEqualTo(3);
     assertThat(configuration.pass()).isEqualTo(Pass.RETRY1);
     assertThat(configuration.attempt()).isEqualTo(2);
+    assertThat(configuration.concurrency()).isEqualTo(2);
     assertThat(configuration.retryBudget()).isEqualTo(Duration.ofSeconds(90));
     assertThat(configuration.deadline()).isEqualTo(Instant.parse("2026-08-25T10:15:30Z"));
     assertThat(configuration.allLeasedAbortedIsFailure()).isFalse();
     assertThat(configuration.metadata()).containsEntry("run_id", "42");
+  }
+
+  @Test
+  void givenNoConcurrency_whenResolving_thenOneSlotIsTheDefault() {
+    ShardConfiguration configuration = resolve(completeParameters(), SECRET_ONLY);
+
+    assertThat(configuration.concurrency()).isEqualTo(1);
+  }
+
+  @Test
+  void givenAConcurrencyBelowOne_whenResolving_thenTheFailureNamesTheKey() {
+    Map<String, String> parameters = completeParameters();
+    parameters.put(ShardConfiguration.CONCURRENCY, "0");
+
+    assertThatThrownBy(() -> resolve(parameters, SECRET_ONLY))
+        .isInstanceOf(ShardConfigurationException.class)
+        .hasMessageContaining(ShardConfiguration.CONCURRENCY);
+  }
+
+  @Test
+  void givenANonNumericConcurrency_whenResolving_thenTheFailureNamesTheKey() {
+    Map<String, String> parameters = completeParameters();
+    parameters.put(ShardConfiguration.CONCURRENCY, "both");
+
+    assertThatThrownBy(() -> resolve(parameters, SECRET_ONLY))
+        .isInstanceOf(ShardConfigurationException.class)
+        .hasMessageContaining(ShardConfiguration.CONCURRENCY);
   }
 
   @Test

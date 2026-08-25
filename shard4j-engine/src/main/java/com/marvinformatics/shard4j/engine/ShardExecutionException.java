@@ -6,4 +6,8 @@ public class ShardExecutionException extends RuntimeException {
   public ShardExecutionException(String message) {
     super(message);
   }
+
+  public ShardExecutionException(String message, Throwable cause) {
+    super(message, cause);
+  }
 }

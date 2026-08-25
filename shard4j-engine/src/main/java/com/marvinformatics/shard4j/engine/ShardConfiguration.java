@@ -28,6 +28,9 @@ import org.junit.platform.engine.ConfigurationParameters;
  *     appear in {@code ps} output, in failsafe's argLine echo, and in crash dumps.
  * @param metadata forwarded verbatim as the registration metadata map
  * @param deadline absolute job-kill time; absent means no early self-release
+ * @param concurrency how many classes this shard drains at once; 1 keeps today's strictly
+ *     serial behaviour, and anything higher requires the consumer's classes to tolerate
+ *     running concurrently in one JVM
  */
 public record ShardConfiguration(
     boolean enabled,
@@ -37,6 +40,7 @@ public record ShardConfiguration(
     int shardIndex,
     Pass pass,
     int attempt,
+    int concurrency,
     Map<String, String> metadata,
     Duration retryBudget,
     Instant deadline,
@@ -50,6 +54,7 @@ public record ShardConfiguration(
   static final String SHARD_INDEX = "shard.index";
   static final String PASS = "shard.pass";
   static final String ATTEMPT = "shard.attempt";
+  static final String CONCURRENCY = "shard.concurrency";
   static final String METADATA_PREFIX = "shard.metadata.";
   static final String RETRY_BUDGET = "shard.coordinator.retry.budget";
   static final String DEADLINE = "shard.deadline";
@@ -61,12 +66,17 @@ public record ShardConfiguration(
     return resolve(parameters, System.getenv());
   }
 
+  /** The inert engine: no network call, nothing claimed, an empty discovery. */
+  public static ShardConfiguration disabled() {
+    return new ShardConfiguration(
+        false, null, null, null, -1, null, 1, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+  }
+
   static ShardConfiguration resolve(
       ConfigurationParameters parameters, Map<String, String> environment) {
     Resolver resolver = new Resolver(parameters, environment);
     if (!resolver.flag(ENABLED, false)) {
-      return new ShardConfiguration(
-          false, null, null, null, -1, null, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+      return disabled();
     }
     return new ShardConfiguration(
         true,
@@ -75,7 +85,8 @@ public record ShardConfiguration(
         resolver.required(SESSION_ID),
         resolver.requiredInt(SHARD_INDEX),
         resolver.pass(),
-        resolver.attempt(),
+        resolver.positiveInt(ATTEMPT, 1),
+        resolver.positiveInt(CONCURRENCY, 1),
         resolver.metadata(),
         resolver.duration(RETRY_BUDGET, DEFAULT_RETRY_BUDGET),
         resolver.deadline(),
@@ -152,19 +163,19 @@ public record ShardConfiguration(
       }
     }
 
-    private int attempt() {
-      String value = value(ATTEMPT);
+    private int positiveInt(String key, int absentMeans) {
+      String value = value(key);
       if (value == null) {
-        return 1;
+        return absentMeans;
       }
       try {
-        int attempt = Integer.parseInt(value);
-        if (attempt < 1) {
+        int parsed = Integer.parseInt(value);
+        if (parsed < 1) {
           throw new NumberFormatException();
         }
-        return attempt;
+        return parsed;
       } catch (NumberFormatException e) {
-        throw new ShardConfigurationException(ATTEMPT + " must be a positive integer, got: " + value);
+        throw new ShardConfigurationException(key + " must be a positive integer, got: " + value);
       }
     }
 
