@@ -137,6 +137,22 @@ fixed port, a shared temp directory -- any of these makes concurrent classes uns
 the engine has no way to detect it. Audit for cross-class shared state before opting in;
 until then, stay at `1`.
 
+Two more consequences of opting in are part of the same contract. First, threads: above
+1, every test runs on a named `shard4j-slot-N` worker thread, never on the thread
+failsafe called the engine on -- anything keyed to the main test thread (a thread-local
+initialised outside the engine, an AWT/main-thread assumption) moves with it. At `1`
+nothing changes. Second, lease sizing: never two live instances of the same class means
+a slot granted a class a sibling is already running -- possible whenever a unit is
+re-pooled mid-run -- parks with its batch fully leased, and nothing refreshes a lease,
+so the coordinator's `leaseTtl` must comfortably exceed roughly **two** full class
+drains, not one. An expiry marks the whole shard departed and re-pools the parked batch:
+the run stays honest but pays duplicate execution and a confusing red, so size `leaseTtl`
+generously before raising `shard.concurrency`.
+
+One compatibility note at `0.1.x`: `ShardConfiguration` gained the `concurrency` record
+component mid-signature, which is source-incompatible for anyone calling its constructor
+positionally. Configuration keys are the supported surface; the constructor is not.
+
 Orthogonally, Jupiter's own `junit.jupiter.execution.parallel.enabled` passes through to
 the nested executions and is tolerated: the engine's outcome accounting is thread-safe
 under concurrent events. It parallelises leaves inside one class-drain, which rarely
@@ -187,7 +203,8 @@ deterministic without being alphabetical. Every grant is a lease with an expiry 
 fence, so a shard that stalls or dies loses its work back to the queue instead of taking
 the run down with it.
 Draining a class grants all of its leases up front, so the lease TTL must cover a shard's
-slowest class share, not merely its slowest single test.
+slowest class share, not merely its slowest single test -- and roughly two class shares
+once `shard.concurrency` exceeds 1 (see the in-shard parallelism contract).
 
 Retries are additional passes over the session, not in-place re-runs: a failure leaves the
 test claimable again in the next pass, on whichever shard asks first, and there are at

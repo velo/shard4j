@@ -29,7 +29,12 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param dataDir the one writable directory, locked exclusively at startup
  * @param publicRead serve the read surface without a secret. Off by default: a session id
  *     is not a capability, and for a public repository it appears in public logs.
- * @param leaseTtl must comfortably exceed the consumer's slowest test
+ * @param leaseTtl must comfortably exceed the consumer's slowest test -- and, once any
+ *     shard runs {@code shard.concurrency} above 1, roughly two full class drains: a slot
+ *     granted a class a sibling slot is already running holds its fully-leased batch
+ *     parked, un-refreshed, for the sibling's whole drain before starting its own. An
+ *     expiry marks the whole shard departed and re-pools the parked batch: duplicate
+ *     execution and a red run that is honest but confusing, so size generously.
  * @param durationClamp set to the consumer's shard job timeout
  * @param gcIdle bounds how long a partial re-run can rejoin; pick generously
  */
