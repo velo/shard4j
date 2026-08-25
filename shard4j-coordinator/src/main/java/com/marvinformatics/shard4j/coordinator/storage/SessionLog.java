@@ -1,15 +1,10 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
-import tools.jackson.core.JacksonException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
@@ -23,11 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class SessionLog implements AutoCloseable {
 
-  private final Path dir;
   private final DailyJsonl out;
 
   public SessionLog(Path dir) {
-    this.dir = dir;
     this.out = new DailyJsonl(dir);
   }
 
@@ -49,40 +42,13 @@ public final class SessionLog implements AutoCloseable {
     }
   }
 
-  /**
-   * Reads the window that can still hold a live session, oldest first. A malformed line is
-   * the crash-truncated tail the fsync-per-append design explicitly tolerates; it is
-   * skipped with a warning, never fatal to boot.
-   */
+  /** Reads the window that can still hold a live session, oldest first. */
   public List<LogRecord> replay(Duration gcIdle, Instant now) {
-    LocalDate oldest = now.minus(gcIdle).atZone(ZoneOffset.UTC).toLocalDate();
-    List<LogRecord> records = new ArrayList<>();
-    try {
-      for (Path file : DailyJsonl.filesWithin(dir, oldest)) {
-        for (String line : Files.readAllLines(file)) {
-          if (line.isBlank()) {
-            continue;
-          }
-          try {
-            records.add(StorageJson.MAPPER.readValue(line, LogRecord.class));
-          } catch (JacksonException e) {
-            log.warn("Skipping unparseable line in {}: {}", file, e.getMessage());
-          }
-        }
-      }
-    } catch (IOException e) {
-      throw new UncheckedIOException("Cannot replay session log from " + dir, e);
-    }
-    return records;
+    return out.readWithin(gcIdle, now);
   }
 
   public void prune(Duration gcIdle, Instant now) {
-    LocalDate oldestKept = now.minus(gcIdle).atZone(ZoneOffset.UTC).toLocalDate();
-    try {
-      DailyJsonl.pruneOlderThan(dir, oldestKept);
-    } catch (IOException e) {
-      log.warn("Session log pruning failed: {}", e.toString());
-    }
+    out.prune(gcIdle, now);
   }
 
   @Override

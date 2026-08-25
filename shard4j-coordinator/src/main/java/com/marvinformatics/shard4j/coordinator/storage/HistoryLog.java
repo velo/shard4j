@@ -1,15 +1,9 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
-import tools.jackson.core.JacksonException;
 import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
@@ -24,11 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class HistoryLog implements AutoCloseable {
 
-  private final Path dir;
   private final DailyJsonl out;
 
   public HistoryLog(Path dir) {
-    this.dir = dir;
     this.out = new DailyJsonl(dir);
   }
 
@@ -48,34 +40,11 @@ public final class HistoryLog implements AutoCloseable {
    * first start, no import endpoint, no special record type) becomes warm.
    */
   public List<LogRecord> readWithin(Duration retention, Instant now) {
-    LocalDate oldest = now.minus(retention).atZone(ZoneOffset.UTC).toLocalDate();
-    List<LogRecord> records = new ArrayList<>();
-    try {
-      for (Path file : DailyJsonl.filesWithin(dir, oldest)) {
-        for (String line : Files.readAllLines(file)) {
-          if (line.isBlank()) {
-            continue;
-          }
-          try {
-            records.add(StorageJson.MAPPER.readValue(line, LogRecord.class));
-          } catch (JacksonException e) {
-            log.warn("Skipping unparseable line in {}: {}", file, e.getMessage());
-          }
-        }
-      }
-    } catch (IOException e) {
-      throw new UncheckedIOException("Cannot read duration history from " + dir, e);
-    }
-    return records;
+    return out.readWithin(retention, now);
   }
 
   public void prune(Duration retention, Instant now) {
-    LocalDate oldestKept = now.minus(retention).atZone(ZoneOffset.UTC).toLocalDate();
-    try {
-      DailyJsonl.pruneOlderThan(dir, oldestKept);
-    } catch (IOException e) {
-      log.warn("History pruning failed: {}", e.toString());
-    }
+    out.prune(retention, now);
   }
 
   @Override

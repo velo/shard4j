@@ -14,7 +14,6 @@ import com.marvinformatics.shard4j.protocol.SessionVerdict;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.io.IOException;
-import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -69,7 +68,7 @@ class LeaseExpiryIT {
         client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, CLASS_NAME, List.of(testId)));
     assertThat(silent.granted()).hasSize(1);
     Fence deadFence = silent.granted().get(0).fence();
-    assertThat(stateOf(sessionId, testId)).isEqualTo(TestState.LEASED);
+    assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.LEASED);
 
     // Immediately, before expiry, the unit is not claimable by anyone else.
     ClaimResponse tooSoon =
@@ -77,7 +76,7 @@ class LeaseExpiryIT {
     assertThat(tooSoon.granted()).isEmpty();
 
     waitUntil(
-        () -> stateOf(sessionId, testId) == TestState.PENDING,
+        () -> client.stateOf(sessionId, testId) == TestState.PENDING,
         "the lease should expire back to PENDING");
 
     ClaimResponse reclaimed =
@@ -86,17 +85,17 @@ class LeaseExpiryIT {
     Fence liveFence = reclaimed.granted().get(0).fence();
     assertThat(liveFence).isGreaterThan(deadFence);
 
-    HttpResponse<String> lateWrite =
+    CoordinatorClient.RawResponse lateWrite =
         client.resultRaw(
             sessionId,
             new ResultRequest(
                 0, Pass.MAIN, testId, deadFence, Outcome.PASSED, 60_000, false, null, null));
-    assertThat(lateWrite.statusCode()).isEqualTo(409);
+    assertThat(lateWrite.status()).isEqualTo(409);
 
     client.result(
         sessionId,
         new ResultRequest(1, Pass.MAIN, testId, liveFence, Outcome.PASSED, 900, false, null, null));
-    assertThat(stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
+    assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
   }
 
   /**
@@ -119,20 +118,12 @@ class LeaseExpiryIT {
     assertThat(claimed.granted()).hasSize(1);
 
     waitUntil(
-        () -> stateOf(sessionId, hanging) == TestState.PENDING,
+        () -> client.stateOf(sessionId, hanging) == TestState.PENDING,
         "the lease should expire back to PENDING");
 
     SessionView stranded = client.view(sessionId);
     assertThat(stranded.shards()).allMatch(SessionView.ShardView::departed);
     assertThat(CoverageVerdict.of(stranded)).isEqualTo(SessionVerdict.INCOMPLETE);
-  }
-
-  private static TestState stateOf(String sessionId, String testId) {
-    return client.view(sessionId).tests().stream()
-        .filter(test -> test.testId().equals(testId))
-        .findFirst()
-        .orElseThrow()
-        .state();
   }
 
   private static void waitUntil(BooleanSupplier condition, String what)

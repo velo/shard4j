@@ -75,6 +75,34 @@
       <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
+
+    <!-- The integration tests talk to the container over the same Feign + Jackson stack
+         the shipped engine uses, so a client-stack bug fails here first. Test scope only:
+         the coordinator's own runtime stays Spring. -->
+    <dependency>
+      <groupId>io.github.openfeign</groupId>
+      <artifactId>feign-core</artifactId>
+      <version>${feign.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.github.openfeign</groupId>
+      <artifactId>feign-jackson</artifactId>
+      <version>${feign.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+      <version>${jackson.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

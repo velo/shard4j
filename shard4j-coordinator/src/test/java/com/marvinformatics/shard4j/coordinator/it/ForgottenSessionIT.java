@@ -45,17 +45,17 @@ class ForgottenSessionIT {
   }
 
   @Test
-  void everyCallOnAnUnknownSessionIs404AndNeverCreatesOne() {
+  void givenAnUnknownSession_whenAnyCallArrives_then404AndNothingIsAutoCreated() {
     String sessionId = UUID.randomUUID().toString();
     String testId = Ids.method("com.example.orders.GhostIT", "vanish");
     Fence fence = new Fence(1, 1, 1);
 
     assertThat(
             client
-                .post(
-                    "/sessions/" + sessionId + "/claims",
+                .claimRaw(
+                    sessionId,
                     new ClaimRequest(0, Pass.MAIN, "com.example.orders.GhostIT", List.of(testId)))
-                .statusCode())
+                .status())
         .isEqualTo(404);
     assertThat(
             client
@@ -63,21 +63,21 @@ class ForgottenSessionIT {
                     sessionId,
                     new ResultRequest(
                         0, Pass.MAIN, testId, fence, Outcome.PASSED, 100, false, null, null))
-                .statusCode())
+                .status())
         .isEqualTo(404);
     assertThat(
             client
-                .post(
-                    "/sessions/" + sessionId + "/nack",
+                .nackRaw(
+                    sessionId,
                     new NackRequest(
                         0, List.of(new NackRequest.NackedLease(testId, fence, "shutting down"))))
-                .statusCode())
+                .status())
         .isEqualTo(404);
     assertThat(
-            client.post("/sessions/" + sessionId + "/depart", new DepartRequest(0)).statusCode())
+            client.departRaw(sessionId, new DepartRequest(0)).status())
         .isEqualTo(404);
 
-    assertThat(client.get("/sessions/" + sessionId).statusCode())
+    assertThat(client.viewRaw(sessionId).status())
         .as("being asked about must not have created the session")
         .isEqualTo(404);
   }

@@ -19,7 +19,7 @@ import org.testcontainers.containers.output.ToStringConsumer;
 class StartupGuardIT {
 
   @Test
-  void refusesToStartWithoutAnyAcceptedSecretNamingTheVariable() throws IOException {
+  void givenNoAcceptedSecret_whenStarting_thenRefusesToStartNamingTheVariable() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "no-secret-data");
     ToStringConsumer logs = new ToStringConsumer();
     GenericContainer<?> unsecured =
@@ -39,7 +39,7 @@ class StartupGuardIT {
   }
 
   @Test
-  void everyCallWithoutTheSharedSecretIs401ExceptTheHealthProbes() throws IOException {
+  void givenASecuredCoordinator_whenCalledWithoutTheSecret_then401ExceptTheHealthProbes() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "auth-data");
     GenericContainer<?> secured = CoordinatorContainers.coordinator(dataDir, Map.of());
     try {
@@ -49,21 +49,21 @@ class StartupGuardIT {
       CoordinatorClient authorised = new CoordinatorClient(secured);
       String sessionId = UUID.randomUUID().toString();
 
-      assertThat(anonymous.get("/sessions/" + sessionId).statusCode()).isEqualTo(401);
-      assertThat(wrongSecret.get("/sessions/" + sessionId).statusCode()).isEqualTo(401);
-      assertThat(wrongSecret.post("/sessions/" + sessionId + "/depart", Map.of("shard", 0)).statusCode())
+      assertThat(anonymous.viewRaw(sessionId).status()).isEqualTo(401);
+      assertThat(wrongSecret.viewRaw(sessionId).status()).isEqualTo(401);
+      assertThat(wrongSecret.departRaw(sessionId, Map.of("shard", 0)).status())
           .isEqualTo(401);
-      assertThat(anonymous.get("/healthz").statusCode()).isEqualTo(200);
-      assertThat(anonymous.get("/readyz").statusCode()).isEqualTo(200);
+      assertThat(anonymous.probe("healthz").status()).isEqualTo(200);
+      assertThat(anonymous.probe("readyz").status()).isEqualTo(200);
       // The right secret gets through the filter and reaches the real 404.
-      assertThat(authorised.get("/sessions/" + sessionId).statusCode()).isEqualTo(404);
+      assertThat(authorised.viewRaw(sessionId).status()).isEqualTo(404);
     } finally {
       secured.stop();
     }
   }
 
   @Test
-  void publicReadIsAnExplicitOptInAndOpensOnlyTheReadSurface() throws IOException {
+  void givenPublicReadOptIn_whenAnonymousCallsArrive_thenOnlyTheReadSurfaceIsOpen() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "public-read-data");
     GenericContainer<?> publicRead =
         CoordinatorContainers.coordinator(dataDir, Map.of("COORDINATOR_PUBLIC_READ", "true"));
@@ -72,10 +72,10 @@ class StartupGuardIT {
       CoordinatorClient anonymous = new CoordinatorClient(publicRead, null);
       String sessionId = UUID.randomUUID().toString();
 
-      assertThat(anonymous.get("/sessions/" + sessionId).statusCode())
+      assertThat(anonymous.viewRaw(sessionId).status())
           .as("read is open, so the answer is the session-level 404, not a 401")
           .isEqualTo(404);
-      assertThat(anonymous.post("/sessions/" + sessionId + "/depart", Map.of("shard", 0)).statusCode())
+      assertThat(anonymous.departRaw(sessionId, Map.of("shard", 0)).status())
           .as("mutating calls stay authenticated regardless")
           .isEqualTo(401);
     } finally {

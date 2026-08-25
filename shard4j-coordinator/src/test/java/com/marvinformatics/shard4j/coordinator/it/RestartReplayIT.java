@@ -2,8 +2,6 @@ package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.marvinformatics.shard4j.protocol.ClaimRequest;
-import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.Pass;
@@ -32,7 +30,7 @@ class RestartReplayIT {
   private static final String CLASS_B = "com.example.orders.ReplayBetaIT";
 
   @Test
-  void aKilledCoordinatorComesBackWithItsPassedSetIntactAndLeasesReturned() throws IOException {
+  void givenAKilledCoordinator_whenRestartedOnTheSameVolume_thenPassedSetIntactAndLeasesReturned() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "restart-replay-data");
     String sessionId = UUID.randomUUID().toString();
     String passed = Ids.method(CLASS_A, "alreadyDone");
@@ -50,21 +48,21 @@ class RestartReplayIT {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
       client.register(sessionId, registration);
-      Fence passedFence = claimOne(client, sessionId, passed);
+      Fence passedFence = client.claimOne(sessionId, 0, passed);
       incarnationBefore = passedFence.incarnation();
       client.result(
           sessionId,
           new ResultRequest(0, Pass.MAIN, passed, passedFence, Outcome.PASSED, 5_000, false, null, null));
-      Fence failedFence = claimOne(client, sessionId, failed);
+      Fence failedFence = client.claimOne(sessionId, 0, failed);
       client.result(
           sessionId,
           new ResultRequest(0, Pass.MAIN, failed, failedFence, Outcome.FAILED, 3_000, false, null, null));
-      Fence skippedFence = claimOne(client, sessionId, skipped);
+      Fence skippedFence = client.claimOne(sessionId, 0, skipped);
       client.result(
           sessionId,
           new ResultRequest(
               0, Pass.MAIN, skipped, skippedFence, Outcome.SKIPPED, 2, false, "disabled", null));
-      claimOne(client, sessionId, leased);
+      client.claimOne(sessionId, 0, leased);
 
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
     } finally {
@@ -78,9 +76,9 @@ class RestartReplayIT {
 
       SessionView view = client.view(sessionId);
       assertThat(view.registeredCount()).isEqualTo(5);
-      assertThat(stateOf(view, passed)).isEqualTo(TestState.PASSED);
-      assertThat(stateOf(view, failed)).isEqualTo(TestState.FAILED);
-      assertThat(stateOf(view, skipped)).isEqualTo(TestState.SKIPPED);
+      assertThat(CoordinatorClient.stateOf(view, passed)).isEqualTo(TestState.PASSED);
+      assertThat(CoordinatorClient.stateOf(view, failed)).isEqualTo(TestState.FAILED);
+      assertThat(CoordinatorClient.stateOf(view, skipped)).isEqualTo(TestState.SKIPPED);
       assertThat(
               view.tests().stream()
                   .filter(test -> test.testId().equals(skipped))
@@ -89,14 +87,14 @@ class RestartReplayIT {
                   .reason())
           .isEqualTo("disabled");
       // A lease is a liveness claim and liveness did not survive the crash.
-      assertThat(stateOf(view, leased)).isEqualTo(TestState.PENDING);
-      assertThat(stateOf(view, untouched)).isEqualTo(TestState.PENDING);
+      assertThat(CoordinatorClient.stateOf(view, leased)).isEqualTo(TestState.PENDING);
+      assertThat(CoordinatorClient.stateOf(view, untouched)).isEqualTo(TestState.PENDING);
 
       // The recovered duration survives too: it came from the history files on the volume.
       assertThat(Files.exists(dataDir.resolve(CoordinatorContainers.TENANT_SLUG).resolve("current.json")))
           .isTrue();
 
-      Fence reclaimed = claimOne(client, sessionId, leased);
+      Fence reclaimed = client.claimOne(sessionId, 0, leased);
       assertThat(reclaimed.incarnation())
           .as("a restart must fence out every pre-restart zombie")
           .isGreaterThan(incarnationBefore);
@@ -105,20 +103,4 @@ class RestartReplayIT {
     }
   }
 
-  private static Fence claimOne(CoordinatorClient client, String sessionId, String testId) {
-    ClaimResponse response =
-        client.claim(
-            sessionId,
-            new ClaimRequest(0, Pass.MAIN, Ids.classNameOf(testId), List.of(testId)));
-    assertThat(response.granted()).hasSize(1);
-    return response.granted().get(0).fence();
-  }
-
-  private static TestState stateOf(SessionView view, String testId) {
-    return view.tests().stream()
-        .filter(test -> test.testId().equals(testId))
-        .findFirst()
-        .orElseThrow()
-        .state();
-  }
 }

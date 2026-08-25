@@ -3,7 +3,6 @@ package com.marvinformatics.shard4j.coordinator.core;
 import com.marvinformatics.shard4j.protocol.SessionVerdict;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.util.Set;
 import lombok.experimental.UtilityClass;
 
 /**
@@ -17,15 +16,12 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class CoverageVerdict {
 
-  private final Set<TestState> TERMINAL_NON_FAILING =
-      Set.of(TestState.PASSED, TestState.SKIPPED, TestState.ABORTED);
-
   public SessionVerdict of(SessionView view) {
     if (view.registeredCount() <= 0) {
       return SessionVerdict.FAILED;
     }
     long terminalNonFailing =
-        view.tests().stream().filter(test -> TERMINAL_NON_FAILING.contains(test.state())).count();
+        view.tests().stream().filter(test -> test.state().isAbsorbing()).count();
     if (terminalNonFailing == view.registeredCount()) {
       return SessionVerdict.PASSED;
     }
