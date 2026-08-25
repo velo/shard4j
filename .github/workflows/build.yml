@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
 
 permissions:
@@ -95,3 +97,80 @@ jobs:
       - name: Stop the coordinator
         if: always()
         run: docker rm -f shard4j-coordinator
+
+  # Builds the coordinator image on every run, so a PR proves it still builds; pushes to
+  # GHCR only from main and release tags. GITHUB_TOKEN with packages: write is all the
+  # registry needs -- no PAT. The smoke test boots the actual image: /healthz must answer
+  # with a secret set, and an unset COORDINATOR_SECRETS must be a refused start.
+  container-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build the coordinator app jar
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Build the image
+        run: docker build -t shard4j-coordinator-ci shard4j-coordinator
+
+      - name: Smoke test the image
+        run: |
+          mkdir -p /tmp/shard4j-smoke-data
+          chmod 0777 /tmp/shard4j-smoke-data
+          docker run -d --name shard4j-smoke -p 18080:8080 \
+            -e COORDINATOR_SECRETS=local-smoke-only \
+            -e COORDINATOR_TENANT_KEY=example/orders-service \
+            -e COORDINATOR_TENANT_SLUG=orders-service \
+            -v /tmp/shard4j-smoke-data:/data \
+            shard4j-coordinator-ci
+          ok=0
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:18080/healthz >/dev/null 2>&1 && { ok=1; break; }
+            sleep 1
+          done
+          docker logs shard4j-smoke >&2 || true
+          docker rm -f shard4j-smoke >/dev/null
+          [ "$ok" = 1 ] || { echo "image never answered /healthz" >&2; exit 1; }
+          docker run -d --name shard4j-smoke-nosecret shard4j-coordinator-ci
+          refused=0
+          for _ in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Running}}' shard4j-smoke-nosecret)" = "false" ]; then
+              refused=1
+              break
+            fi
+            sleep 1
+          done
+          exitcode=$(docker inspect -f '{{.State.ExitCode}}' shard4j-smoke-nosecret)
+          docker logs shard4j-smoke-nosecret 2>&1 | grep -q 'COORDINATOR_SECRETS' || refused=0
+          docker rm -f shard4j-smoke-nosecret >/dev/null
+          if [ "$refused" != 1 ] || [ "$exitcode" = 0 ]; then
+            echo "image did not refuse to start without COORDINATOR_SECRETS" >&2
+            exit 1
+          fi
+
+      - name: Push to GHCR
+        if: github.event_name == 'push'
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          IMAGE=ghcr.io/${{ github.repository }}
+          VERSION=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          docker tag shard4j-coordinator-ci "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+          if [ '${{ github.ref }}' = 'refs/heads/main' ]; then
+            docker tag shard4j-coordinator-ci "$IMAGE:sha-${GITHUB_SHA::12}"
+            docker push "$IMAGE:sha-${GITHUB_SHA::12}"
+          fi
+          if [ '${{ github.ref_type }}' = 'tag' ]; then
+            docker tag shard4j-coordinator-ci "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
