@@ -1,6 +1,8 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
 import com.marvinformatics.shard4j.protocol.Fence;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 
 /**
  * A write under a fence that no longer holds the lease: the lease was reclaimed, the epoch
@@ -9,14 +11,12 @@ import com.marvinformatics.shard4j.protocol.Fence;
  */
 public class StaleFenceException extends RuntimeException {
 
+  @Getter
+  @Accessors(fluent = true)
   private final transient Fence currentFence;
 
   public StaleFenceException(Fence currentFence) {
     super("Stale fence; current is " + currentFence);
     this.currentFence = currentFence;
-  }
-
-  public Fence currentFence() {
-    return currentFence;
   }
 }

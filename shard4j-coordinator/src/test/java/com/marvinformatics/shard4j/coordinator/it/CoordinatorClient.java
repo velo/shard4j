@@ -21,9 +21,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import lombok.SneakyThrows;
 import org.testcontainers.containers.GenericContainer;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -108,14 +108,11 @@ final class CoordinatorClient {
     return JSON.readValue(response.body(), SessionView.class);
   }
 
+  @SneakyThrows
   static String hashOf(List<String> testIds) {
-    try {
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      String canonical = String.join("\n", testIds.stream().sorted().toList());
-      return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException(e);
-    }
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    String canonical = String.join("\n", testIds.stream().sorted().toList());
+    return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
   }
 
   private HttpResponse<String> send(HttpRequest request) {

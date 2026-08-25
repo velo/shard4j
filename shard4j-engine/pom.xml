@@ -86,10 +86,35 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- Compile-time only: utility-class shape and other pure boilerplate. Provided
+         scope keeps it out of the shipped tree, which the footprint rule verifies. -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
 
   <build>
     <plugins>
+      <!-- JDK 23+ no longer runs classpath annotation processors implicitly, so
+           Lombok must be named here to run at all. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+              <version>${lombok.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>

@@ -56,6 +56,7 @@
          baseline is 17 rather than something newer. -->
     <junit.bom.version>5.13.4</junit.bom.version>
     <feign.version>13.14</feign.version>
+    <lombok.version>1.18.46</lombok.version>
     <jackson.version>2.22.2</jackson.version>
     <spring-boot.version>4.1.1</spring-boot.version>
 

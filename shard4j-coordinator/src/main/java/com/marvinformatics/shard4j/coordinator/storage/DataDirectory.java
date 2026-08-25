@@ -11,7 +11,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.experimental.Accessors;
 
 /**
  * The one writable directory. Exactly one process may own it: single-writer is a
@@ -22,13 +24,14 @@ import lombok.RequiredArgsConstructor;
  * served. Without it a restart would reset the fence sequence and a pre-restart zombie's
  * write would compare valid; it also survives a wall clock stepping backwards.
  */
+@Accessors(fluent = true)
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public final class DataDirectory implements AutoCloseable {
 
   private final FileChannel lockChannel;
   private final FileLock lock;
-  private final Path tenantDir;
-  private final long incarnation;
+  @Getter private final Path tenantDir;
+  @Getter private final long incarnation;
 
   public static DataDirectory open(Path root, String tenantSlug) {
     try {
@@ -62,10 +65,6 @@ public final class DataDirectory implements AutoCloseable {
     }
   }
 
-  public Path tenantDir() {
-    return tenantDir;
-  }
-
   public Path sessionsDir() {
     return tenantDir.resolve("sessions");
   }
@@ -76,10 +75,6 @@ public final class DataDirectory implements AutoCloseable {
 
   public Path snapshotFile() {
     return tenantDir.resolve("current.json");
-  }
-
-  public long incarnation() {
-    return incarnation;
   }
 
   public boolean lockHeld() {

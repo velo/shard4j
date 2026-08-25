@@ -4,6 +4,7 @@ import com.marvinformatics.shard4j.protocol.SessionVerdict;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.util.Set;
+import lombok.experimental.UtilityClass;
 
 /**
  * The coverage rule, as pure logic over the read model: the session passed if and only if
@@ -13,14 +14,13 @@ import java.util.Set;
  * <p>{@code registeredCount > 0} guards a replay into an empty session, where zero-equals-
  * zero would go green having run nothing.
  */
-public final class CoverageVerdict {
+@UtilityClass
+public class CoverageVerdict {
 
-  private static final Set<TestState> TERMINAL_NON_FAILING =
+  private final Set<TestState> TERMINAL_NON_FAILING =
       Set.of(TestState.PASSED, TestState.SKIPPED, TestState.ABORTED);
 
-  private CoverageVerdict() {}
-
-  public static SessionVerdict of(SessionView view) {
+  public SessionVerdict of(SessionView view) {
     if (view.registeredCount() <= 0) {
       return SessionVerdict.FAILED;
     }

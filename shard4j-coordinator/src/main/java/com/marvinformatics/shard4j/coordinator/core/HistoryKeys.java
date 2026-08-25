@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.coordinator.core;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import lombok.experimental.UtilityClass;
 
 /**
  * Derives the duration-history key from a wire execution id.
@@ -13,18 +14,17 @@ import java.util.regex.Pattern;
  * (plain method), shape B (template method) and shape C (template invocation) all collapse to
  * one key per lease unit, which is exactly what the scheduler hands out.
  */
-public final class HistoryKeys {
+@UtilityClass
+public class HistoryKeys {
 
-  private static final Pattern EXECUTION_ID =
+  private final Pattern EXECUTION_ID =
       Pattern.compile(
           "\\[engine:junit-jupiter\\]"
               + "/\\[class:(?<className>[^\\]]+)\\]"
               + "/\\[(?:method|test-template):(?<method>[^\\]]+)\\]"
               + "(?:/\\[test-template-invocation:#\\d+\\])?");
 
-  private HistoryKeys() {}
-
-  public static HistoryKey of(String executionId) {
+  public HistoryKey of(String executionId) {
     Matcher matcher = EXECUTION_ID.matcher(executionId);
     if (!matcher.matches()) {
       throw new IllegalArgumentException(

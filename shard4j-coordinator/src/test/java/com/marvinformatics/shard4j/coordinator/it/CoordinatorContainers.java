@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import lombok.experimental.UtilityClass;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -20,15 +21,16 @@ import org.testcontainers.images.builder.ImageFromDockerfile;
  * <p>The container runs as the invoking user so files written into the bind-mounted data
  * directory stay deletable by the build.
  */
-final class CoordinatorContainers {
+@UtilityClass
+class CoordinatorContainers {
 
-  static final String SECRET = "local-integration-only";
-  static final String TENANT_KEY = "example/orders-service";
-  static final String TENANT_SLUG = "orders-service";
+  final String SECRET = "local-integration-only";
+  final String TENANT_KEY = "example/orders-service";
+  final String TENANT_SLUG = "orders-service";
 
   // Auto-named on purpose: a fixed image name is silently reused from a previous build,
   // and tests against a stale jar are worse than a few seconds of rebuild.
-  private static final ImageFromDockerfile IMAGE =
+  private final ImageFromDockerfile IMAGE =
       new ImageFromDockerfile()
           .withFileFromPath("app.jar", Path.of(System.getProperty("coordinator.app.jar")))
           .withDockerfileFromBuilder(
@@ -39,9 +41,7 @@ final class CoordinatorContainers {
                       .entryPoint("java", "-jar", "/opt/shard4j/app.jar")
                       .build());
 
-  private CoordinatorContainers() {}
-
-  static GenericContainer<?> coordinator(Path dataDir, Map<String, String> extraEnv) {
+  GenericContainer<?> coordinator(Path dataDir, Map<String, String> extraEnv) {
     Map<String, String> env = new HashMap<>();
     env.put("COORDINATOR_SECRETS", SECRET);
     env.put("COORDINATOR_TENANT_KEY", TENANT_KEY);
@@ -60,7 +60,7 @@ final class CoordinatorContainers {
   }
 
   /** For the refuse-to-start test: no env defaults beyond what is given. */
-  static GenericContainer<?> bareCoordinator(Path dataDir, Map<String, String> env) {
+  GenericContainer<?> bareCoordinator(Path dataDir, Map<String, String> env) {
     return new GenericContainer<>(IMAGE)
         .withExposedPorts(8080)
         .withEnv(env)
@@ -70,7 +70,7 @@ final class CoordinatorContainers {
         .withStartupTimeout(Duration.ofSeconds(20));
   }
 
-  private static String currentUidGid() {
+  private String currentUidGid() {
     try {
       Path probe = Path.of(".");
       int uid = (Integer) Files.getAttribute(probe, "unix:uid");

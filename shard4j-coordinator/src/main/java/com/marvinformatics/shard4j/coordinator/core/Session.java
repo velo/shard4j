@@ -13,23 +13,26 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 
 /**
  * One live session: the census, the per-unit state machine, the shard roster and the
  * diagnostic side channels. All mutation happens under the coordinator's single write lock.
  */
+@Accessors(fluent = true)
 final class Session {
 
-  private final String id;
-  private final String testSetHash;
+  @Getter private final String id;
+  @Getter private final String testSetHash;
   private final Map<String, String> metadata;
   private final Map<String, UnitState> units = new LinkedHashMap<>();
   private final Map<Integer, ShardInfo> shards = new TreeMap<>();
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
-  private int attempt;
-  private long epoch;
-  private Instant lastActivity;
+  @Getter private int attempt;
+  @Getter private long epoch;
+  @Getter private Instant lastActivity;
 
   Session(
       String id,
@@ -48,28 +51,8 @@ final class Session {
     this.lastActivity = now;
   }
 
-  String id() {
-    return id;
-  }
-
-  int attempt() {
-    return attempt;
-  }
-
-  long epoch() {
-    return epoch;
-  }
-
-  String testSetHash() {
-    return testSetHash;
-  }
-
   int registeredCount() {
     return units.size();
-  }
-
-  Instant lastActivity() {
-    return lastActivity;
   }
 
   void touch(Instant now) {

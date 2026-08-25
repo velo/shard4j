@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.function.Function;
+import lombok.experimental.UtilityClass;
 
 /**
  * The order in which claimable units are granted: slowest first by the measured aggregate,
@@ -16,11 +17,10 @@ import java.util.function.Function;
  * sentinel estimate. Unknowns are never compared against a known duration, which is what
  * makes the missing-estimate question moot instead of a guessing game.
  */
-public final class ClaimOrdering {
+@UtilityClass
+public class ClaimOrdering {
 
-  private ClaimOrdering() {}
-
-  public static List<String> order(
+  public List<String> order(
       List<String> candidates, Function<HistoryKey, OptionalLong> estimates) {
     record Ranked(String id, HistoryKey key, OptionalLong estimate) {}
 

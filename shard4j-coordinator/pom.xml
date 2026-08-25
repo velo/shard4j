@@ -20,7 +20,6 @@
          classpath, so it is free to sit on the current LTS. -->
     <maven.compiler.release>${coordinator.compiler.release}</maven.compiler.release>
     <testcontainers.version>1.21.3</testcontainers.version>
-    <lombok.version>1.18.46</lombok.version>
   </properties>
 
   <dependencyManagement>

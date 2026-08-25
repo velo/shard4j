@@ -6,6 +6,7 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import lombok.Builder;
 
 /**
  * One JSONL line. A single flat shape with nullable fields rather than a class hierarchy,
@@ -16,6 +17,7 @@ import java.util.Map;
  * ordering aggregate) from a per-invocation record kept for humans diagnosing a slow or
  * flaky row inside a parameterized method.
  */
+@Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record LogRecord(
     Type type,
@@ -51,24 +53,17 @@ public record LogRecord(
       String testSetHash,
       List<String> tests,
       Instant ts) {
-    return new LogRecord(
-        Type.REGISTERED,
-        project,
-        session,
-        attempt,
-        epoch,
-        metadata,
-        testSetHash,
-        tests,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        ts);
+    return LogRecord.builder()
+        .type(Type.REGISTERED)
+        .project(project)
+        .session(session)
+        .attempt(attempt)
+        .epoch(epoch)
+        .metadata(metadata)
+        .testSetHash(testSetHash)
+        .tests(tests)
+        .ts(ts)
+        .build();
   }
 
   public static LogRecord unitCompletion(
@@ -83,24 +78,21 @@ public record LogRecord(
       boolean firstOnShard,
       String reason,
       Instant ts) {
-    return new LogRecord(
-        Type.COMPLETION,
-        project,
-        session,
-        null,
-        epoch,
-        null,
-        null,
-        null,
-        testId,
-        true,
-        shard,
-        pass,
-        outcome,
-        durationMs,
-        firstOnShard,
-        reason,
-        ts);
+    return LogRecord.builder()
+        .type(Type.COMPLETION)
+        .project(project)
+        .session(session)
+        .epoch(epoch)
+        .testId(testId)
+        .unit(true)
+        .shard(shard)
+        .pass(pass)
+        .outcome(outcome)
+        .durationMs(durationMs)
+        .firstOnShard(firstOnShard)
+        .reason(reason)
+        .ts(ts)
+        .build();
   }
 
   public static LogRecord invocationCompletion(
@@ -114,45 +106,32 @@ public record LogRecord(
       long durationMs,
       String reason,
       Instant ts) {
-    return new LogRecord(
-        Type.COMPLETION,
-        project,
-        session,
-        null,
-        epoch,
-        null,
-        null,
-        null,
-        testId,
-        false,
-        shard,
-        pass,
-        outcome,
-        durationMs,
-        null,
-        reason,
-        ts);
+    return LogRecord.builder()
+        .type(Type.COMPLETION)
+        .project(project)
+        .session(session)
+        .epoch(epoch)
+        .testId(testId)
+        .unit(false)
+        .shard(shard)
+        .pass(pass)
+        .outcome(outcome)
+        .durationMs(durationMs)
+        .reason(reason)
+        .ts(ts)
+        .build();
   }
 
   public static LogRecord nack(
       String project, String session, int shard, String testId, String reason, Instant ts) {
-    return new LogRecord(
-        Type.NACK,
-        project,
-        session,
-        null,
-        null,
-        null,
-        null,
-        null,
-        testId,
-        null,
-        shard,
-        null,
-        null,
-        null,
-        null,
-        reason,
-        ts);
+    return LogRecord.builder()
+        .type(Type.NACK)
+        .project(project)
+        .session(session)
+        .shard(shard)
+        .testId(testId)
+        .reason(reason)
+        .ts(ts)
+        .build();
   }
 }
