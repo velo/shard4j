@@ -53,21 +53,60 @@ public final class DurationStore {
   static final int SESSION_WINDOW = 5;
 
   /**
-   * {@code fromInvocations} says the entry was accreted from individually-reported
-   * invocation results, so its {@code durationMs} is the running sum of them rather than a
-   * measured whole-method time; {@code invocationsComplete} says the breakdown enumerates
-   * every invocation the method had in that session.
+   * One session's figure for one method: the measured (or accreted) duration plus its
+   * per-invocation breakdown. Every mutation goes through {@link #with(Breakdown)}, which
+   * re-derives the total -- there is exactly one place the total rule lives.
    */
-  public record Entry(
-      String session,
-      long durationMs,
-      boolean firstOnShard,
-      boolean fromInvocations,
-      boolean invocationsComplete,
-      Map<Integer, Long> invocations) {
+  public record Entry(String session, long durationMs, boolean firstOnShard, Breakdown breakdown) {
 
-    Map<Integer, Long> invocationsOrEmpty() {
-      return invocations == null ? Map.of() : invocations;
+    public Entry {
+      breakdown = breakdown == null ? Breakdown.NONE : breakdown;
+    }
+
+    Entry with(Breakdown updated) {
+      return new Entry(session, updated.total(durationMs), firstOnShard, updated);
+    }
+  }
+
+  /**
+   * The per-invocation breakdown of one entry: position to duration. {@code
+   * fromInvocations} says the entry was accreted from individually-reported invocation
+   * results, so its total is the running sum of the rows rather than a measured
+   * whole-method time; {@code complete} says the rows enumerate every invocation the
+   * method had in that session -- the precondition for ever using them as a distribution
+   * plan.
+   */
+  public record Breakdown(boolean fromInvocations, boolean complete, Map<Integer, Long> rows) {
+
+    static final Breakdown NONE = new Breakdown(false, false, Map.of());
+
+    public Breakdown {
+      rows = rows == null ? Map.of() : Map.copyOf(rows);
+    }
+
+    static Breakdown accretedFrom(int position, long durationMs) {
+      return new Breakdown(true, false, Map.of(position, durationMs));
+    }
+
+    Breakdown withRow(int position, long durationMs) {
+      Map<Integer, Long> merged = new LinkedHashMap<>(rows);
+      merged.put(position, durationMs);
+      return new Breakdown(fromInvocations, complete, merged);
+    }
+
+    Breakdown withoutRow(int position) {
+      Map<Integer, Long> remaining = new LinkedHashMap<>(rows);
+      remaining.remove(position);
+      return new Breakdown(fromInvocations, complete, remaining);
+    }
+
+    Breakdown completed() {
+      return new Breakdown(fromInvocations, true, rows);
+    }
+
+    /** An accreted entry's total is the sum of its rows; a measured one keeps its own. */
+    long total(long measuredMs) {
+      return fromInvocations ? rows.values().stream().mapToLong(Long::longValue).sum() : measuredMs;
     }
   }
 
@@ -88,7 +127,7 @@ public final class DurationStore {
     if (sessionAlreadyPresent) {
       return;
     }
-    entries.add(new Entry(session, durationMs, firstOnShard, false, false, Map.of()));
+    entries.add(new Entry(session, durationMs, firstOnShard, Breakdown.NONE));
     trimWindow(entries);
     dirty = true;
   }
@@ -107,25 +146,11 @@ public final class DurationStore {
     int index = indexOfSession(entries, session);
     if (index < 0) {
       entries.add(
-          new Entry(session, durationMs, false, true, false, Map.of(position, durationMs)));
+          new Entry(session, durationMs, false, Breakdown.accretedFrom(position, durationMs)));
       trimWindow(entries);
     } else {
       Entry entry = entries.get(index);
-      Map<Integer, Long> merged = new LinkedHashMap<>(entry.invocationsOrEmpty());
-      merged.put(position, durationMs);
-      long total =
-          entry.fromInvocations()
-              ? merged.values().stream().mapToLong(Long::longValue).sum()
-              : entry.durationMs();
-      entries.set(
-          index,
-          new Entry(
-              session,
-              total,
-              entry.firstOnShard(),
-              entry.fromInvocations(),
-              entry.invocationsComplete(),
-              merged));
+      entries.set(index, entry.with(entry.breakdown().withRow(position, durationMs)));
     }
     dirty = true;
   }
@@ -140,19 +165,11 @@ public final class DurationStore {
       return;
     }
     int index = indexOfSession(entries, session);
-    if (index < 0 || entries.get(index).invocationsOrEmpty().isEmpty()) {
+    if (index < 0 || entries.get(index).breakdown().rows().isEmpty()) {
       return;
     }
     Entry entry = entries.get(index);
-    entries.set(
-        index,
-        new Entry(
-            entry.session(),
-            entry.durationMs(),
-            entry.firstOnShard(),
-            entry.fromInvocations(),
-            true,
-            entry.invocations()));
+    entries.set(index, entry.with(entry.breakdown().completed()));
     dirty = true;
   }
 
@@ -169,8 +186,8 @@ public final class DurationStore {
     }
     for (int i = entries.size() - 1; i >= 0; i--) {
       Entry entry = entries.get(i);
-      if (entry.invocationsComplete()) {
-        return entry.invocationsOrEmpty().keySet().stream().sorted().toList();
+      if (entry.breakdown().complete()) {
+        return entry.breakdown().rows().keySet().stream().sorted().toList();
       }
     }
     return List.of();
@@ -184,7 +201,7 @@ public final class DurationStore {
     }
     List<Long> rows =
         entries.stream()
-            .map(entry -> entry.invocationsOrEmpty().get(position))
+            .map(entry -> entry.breakdown().rows().get(position))
             .filter(duration -> duration != null)
             .toList();
     return rows.isEmpty() ? OptionalLong.empty() : OptionalLong.of(medianOf(rows));
@@ -201,24 +218,10 @@ public final class DurationStore {
     }
     for (int i = 0; i < entries.size(); i++) {
       Entry entry = entries.get(i);
-      if (!entry.invocationsOrEmpty().containsKey(position)) {
+      if (!entry.breakdown().rows().containsKey(position)) {
         continue;
       }
-      Map<Integer, Long> remaining = new LinkedHashMap<>(entry.invocations());
-      remaining.remove(position);
-      long total =
-          entry.fromInvocations()
-              ? remaining.values().stream().mapToLong(Long::longValue).sum()
-              : entry.durationMs();
-      entries.set(
-          i,
-          new Entry(
-              entry.session(),
-              total,
-              entry.firstOnShard(),
-              entry.fromInvocations(),
-              entry.invocationsComplete(),
-              remaining));
+      entries.set(i, entry.with(entry.breakdown().withoutRow(position)));
       dirty = true;
     }
   }
