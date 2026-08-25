@@ -8,7 +8,6 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -113,20 +112,12 @@ class InvocationRetryIT {
   private static Thread shardThread(
       String sessionId, int shardIndex, Pass pass, DiscoveredCensus census) {
     ShardConfiguration configuration =
-        new ShardConfiguration(
-            true,
-            CoordinatorContainer.urlOf(coordinator),
-            CoordinatorContainer.SECRET,
-            sessionId,
-            shardIndex,
-            pass,
-            1,
-            1,
-            2,
-            Map.of(),
-            Duration.ofSeconds(30),
-            null,
-            true);
+        ShardConfigurationBuilder.coordinatedShard(
+                CoordinatorContainer.urlOf(coordinator), sessionId)
+            .shardIndex(shardIndex)
+            .pass(pass)
+            .shardCount(2)
+            .build();
     ShardLoop loop =
         new ShardLoop(
             configuration,

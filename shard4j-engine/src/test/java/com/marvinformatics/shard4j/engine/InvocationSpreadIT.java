@@ -7,7 +7,6 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -84,7 +83,12 @@ class InvocationSpreadIT {
   }
 
   private static Thread shardThread(String sessionId, int shardIndex, DiscoveredCensus census) {
-    ShardConfiguration configuration = configuration(sessionId, shardIndex, Pass.MAIN);
+    ShardConfiguration configuration =
+        ShardConfigurationBuilder.coordinatedShard(
+                CoordinatorContainer.urlOf(coordinator), sessionId)
+            .shardIndex(shardIndex)
+            .shardCount(2)
+            .build();
     ShardLoop loop =
         new ShardLoop(
             configuration,
@@ -92,22 +96,5 @@ class InvocationSpreadIT {
             new CoordinatorGateway(configuration, census.unitIds()),
             EngineTestHarness.outerRequest(EngineExecutionListener.NOOP));
     return new Thread(() -> loop.run(census), "spread-shard-" + shardIndex);
-  }
-
-  private static ShardConfiguration configuration(String sessionId, int shardIndex, Pass pass) {
-    return new ShardConfiguration(
-        true,
-        CoordinatorContainer.urlOf(coordinator),
-        CoordinatorContainer.SECRET,
-        sessionId,
-        shardIndex,
-        pass,
-        1,
-        1,
-        2,
-        Map.of(),
-        Duration.ofSeconds(30),
-        null,
-        true);
   }
 }

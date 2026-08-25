@@ -99,7 +99,7 @@ class CrossClassOrderIT {
 
     // Another shard takes the whole counted class and reports it before this shard runs.
     CoordinatorClient otherShard = CoordinatorContainer.shardApiOf(coordinator);
-    otherShard.register(sessionId, new RegisterRequest(1, 1, Map.of(), census.unitIds()));
+    otherShard.register(sessionId, new RegisterRequest(1, 1, Map.of(), census.unitIds(), null));
     List<Grant> taken =
         otherShard.claim(sessionId, new ClaimRequest(1, Pass.MAIN, counted, countedUnits)).granted();
     assertThat(taken).hasSize(3);

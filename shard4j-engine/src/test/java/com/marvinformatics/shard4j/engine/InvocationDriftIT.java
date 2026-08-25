@@ -8,7 +8,6 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -106,20 +105,10 @@ class InvocationDriftIT {
 
   private static ShardLoop shardLoop(String sessionId) {
     ShardConfiguration configuration =
-        new ShardConfiguration(
-            true,
-            CoordinatorContainer.urlOf(coordinator),
-            CoordinatorContainer.SECRET,
-            sessionId,
-            0,
-            Pass.MAIN,
-            1,
-            1,
-            1,
-            Map.of(),
-            Duration.ofSeconds(30),
-            null,
-            true);
+        ShardConfigurationBuilder.coordinatedShard(
+                CoordinatorContainer.urlOf(coordinator), sessionId)
+            .shardCount(1)
+            .build();
     return new ShardLoop(
         configuration,
         new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID)),
