@@ -10,13 +10,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -63,12 +64,15 @@ final class ShardLoop {
   private final Object dispatchLock = new Object();
 
   /**
-   * Classes with a nested execution in flight. A re-pooled unit (another shard's expiry
-   * or NACK) can hand a slot a class another slot is still running; two live instances of
-   * one class in one JVM is a sharper hazard than two different classes, so the second
-   * slot waits for the first to leave before entering.
+   * One lock per class, holding the one-live-instance-per-class rule across slots. This
+   * exists for the expired-lease zombie: the coordinator avoids naming a class the asking
+   * shard still holds live leases in, but a lease this shard let expire is no longer
+   * live in the coordinator's eyes -- the re-pooled unit can come back through the open
+   * ask while the first slot is still running its class. Two live instances of one class
+   * in one JVM is a sharper hazard than two different classes, so the second slot waits
+   * for the first to leave before entering.
    */
-  private final Set<String> classesInFlight = new HashSet<>();
+  private final ConcurrentHashMap<String, ReentrantLock> classLocks = new ConcurrentHashMap<>();
 
   private final SlotScheduler scheduler = new SlotScheduler();
 
@@ -200,25 +204,17 @@ final class ShardLoop {
      * extend its hold indefinitely, which the TTL exists to bound.
      */
     private void runExclusively(String className, List<Grant> grants) {
-      synchronized (classesInFlight) {
-        while (classesInFlight.contains(className)) {
-          try {
-            classesInFlight.wait();
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ShardExecutionException(
-                "Interrupted while waiting to enter " + className);
-          }
-        }
-        classesInFlight.add(className);
+      ReentrantLock classLock = classLocks.computeIfAbsent(className, name -> new ReentrantLock());
+      try {
+        classLock.lockInterruptibly();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new ShardExecutionException("Interrupted while waiting to enter " + className);
       }
       try {
         runBatch(className, grants);
       } finally {
-        synchronized (classesInFlight) {
-          classesInFlight.remove(className);
-          classesInFlight.notifyAll();
-        }
+        classLock.unlock();
       }
     }
 
