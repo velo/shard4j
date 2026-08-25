@@ -8,11 +8,14 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import lombok.Getter;
 import lombok.experimental.Accessors;
@@ -31,6 +34,12 @@ final class Session {
 
   // The poll cadence the design fixes for a shard waiting at a barrier.
   private static final int RETRY_AFTER_SECONDS = 5;
+
+  // The cadence is mandated, so silence is measurable: a shard holding no lease that has
+  // missed three consecutive polls is presumed dead. Generous against jitter, and cheap to
+  // be wrong about -- a merely slow or partitioned shard rejoins on its next call.
+  private static final Duration PRESUMED_DEAD_AFTER =
+      Duration.ofSeconds(3L * RETRY_AFTER_SECONDS);
 
   @Getter private final String id;
   @Getter private final String testSetHash;
@@ -75,7 +84,9 @@ final class Session {
   }
 
   void join(int shard, Instant now) {
-    shards.computeIfAbsent(shard, index -> new ShardInfo()).departed = false;
+    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    info.departed = false;
+    info.lastSeenAt = now;
     touch(now);
   }
 
@@ -127,6 +138,7 @@ final class Session {
   void completePass(int shard, Pass pass, Instant now) {
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
     info.departed = false;
+    info.lastSeenAt = now;
     if (info.completedPass == null || info.completedPass.ordinal() < pass.ordinal()) {
       info.completedPass = pass;
     }
@@ -187,9 +199,13 @@ final class Session {
     if (retryPool + mayStillFail == 0 || waiting > retryPool + mayStillFail) {
       return done();
     }
+    // The same liveness filter as the waiter count and someLiveShardStillReaches, on
+    // purpose: a released shard was told to stop pulling, can claim nothing and holds no
+    // lease, so no signal it could ever emit -- not even lease expiry -- would advance its
+    // watermark. Counting it here would park the fleet behind a shard that cannot move.
     boolean quorumMet =
         shards.values().stream()
-            .filter(info -> !info.departed)
+            .filter(info -> !info.departed && !info.released)
             .allMatch(
                 info ->
                     info.completedPass != null
@@ -265,6 +281,38 @@ final class Session {
     return newlyDeparted;
   }
 
+  /**
+   * The waiter-side twin of lease expiry: a shard waiting at a barrier holds no lease, so
+   * expiry can never notice its death, yet its stale watermark would keep counting in the
+   * waiter tally and the quorum forever. The mandated poll cadence makes its silence
+   * measurable instead -- no lease held and nothing heard for {@link #PRESUMED_DEAD_AFTER}
+   * means presumed dead, and it departs exactly as an expired holder does. Released shards
+   * are exempt: DONE told them to stop polling, so silence is their normal state, and they
+   * already count in no quorum and no tally.
+   */
+  List<Integer> departSilentShards(Instant now) {
+    Set<Integer> leaseHolders = new HashSet<>();
+    for (UnitState unit : units.values()) {
+      if (unit.state == TestState.LEASED) {
+        leaseHolders.add(unit.lease.shard());
+      }
+    }
+    List<Integer> newlyDeparted = new ArrayList<>();
+    for (Map.Entry<Integer, ShardInfo> entry : shards.entrySet()) {
+      ShardInfo info = entry.getValue();
+      boolean silentTooLong =
+          info.lastSeenAt == null || !info.lastSeenAt.plus(PRESUMED_DEAD_AFTER).isAfter(now);
+      if (!info.departed
+          && !info.released
+          && silentTooLong
+          && !leaseHolders.contains(entry.getKey())) {
+        info.departed = true;
+        newlyDeparted.add(entry.getKey());
+      }
+    }
+    return newlyDeparted;
+  }
+
   Fence currentFence(String testId) {
     Lease lease = currentLease(testId);
     return lease != null ? lease.fence() : null;
@@ -305,7 +353,9 @@ final class Session {
       }
     }
     unit.lease = null;
-    shards.computeIfAbsent(shard, index -> new ShardInfo()).completed++;
+    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    info.completed++;
+    info.lastSeenAt = now;
     touch(now);
   }
 
@@ -388,5 +438,6 @@ final class Session {
     private int completed;
     private Pass completedPass;
     private boolean released;
+    private Instant lastSeenAt;
   }
 }

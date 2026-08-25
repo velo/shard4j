@@ -152,7 +152,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      expireLeases(sessionId, session, now);
+      sweepSilentShards(sessionId, session, now);
       for (String candidate : request.candidates()) {
         if (!session.isRegistered(candidate)) {
           throw new UnregisteredTestException(candidate);
@@ -186,7 +186,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      expireLeases(sessionId, session, now);
+      sweepSilentShards(sessionId, session, now);
       if (!session.isRegistered(request.testId())) {
         throw new UnregisteredTestException(request.testId());
       }
@@ -269,7 +269,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      expireLeases(sessionId, session, now);
+      sweepSilentShards(sessionId, session, now);
       List<String> released = new ArrayList<>();
       List<String> rejected = new ArrayList<>();
       for (NackRequest.NackedLease lease : request.leases()) {
@@ -317,7 +317,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      expireLeases(sessionId, session, now);
+      sweepSilentShards(sessionId, session, now);
       Pass completedSoFar = session.completedPassOf(request.shard());
       if (completedSoFar == null || completedSoFar.ordinal() < request.completedPass().ordinal()) {
         sessionLog.append(
@@ -350,7 +350,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      expireLeases(sessionId, session, now);
+      sweepSilentShards(sessionId, session, now);
       return session.view();
     }
   }
@@ -461,15 +461,23 @@ public final class CoordinatorCore {
   }
 
   /**
-   * Expiry doubles as the silent-death detector: the holder is marked departed, and that
-   * departure is logged so a restart does not resurrect the ghost into a barrier quorum.
-   * Quietly, because expiry fires on read paths too and losing the record only costs a
-   * slower INCOMPLETE after a restart, never a wrong verdict.
+   * The silent-death detector, run before every decision. Lease expiry catches a shard
+   * that died mid-unit; the poll-silence sweep catches one that died holding nothing -- a
+   * waiter at a barrier has no lease for expiry to notice. Both mark the shard departed
+   * and log the departure so a restart does not resurrect the ghost into a barrier quorum.
+   * Quietly, because the sweep fires on read paths too -- and a lost record is not fatal:
+   * replay would revive the ghost from its COMPLETION records with no lease left to
+   * re-expire, but this same sweep re-departs it as soon as its silence exceeds the
+   * tolerance, so the cost is a slower INCOMPLETE, never a wedged fleet.
    */
-  private void expireLeases(String sessionId, Session session, Instant now) {
+  private void sweepSilentShards(String sessionId, Session session, Instant now) {
     for (int shard : session.releaseExpiredLeases(now)) {
       sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
     }
+    for (int shard : session.departSilentShards(now)) {
+      sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
+    }
+
   }
 
   /** The same idle rule the lazy path applies per lookup, in bulk, for the scheduler. */

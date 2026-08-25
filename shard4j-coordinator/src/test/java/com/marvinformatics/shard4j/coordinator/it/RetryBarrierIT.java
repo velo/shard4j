@@ -21,6 +21,7 @@ import com.marvinformatics.shard4j.protocol.TestState;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -306,6 +307,118 @@ class RetryBarrierIT {
     assertThat(arrive(sessionId, 0, Pass.RETRY2).action()).isEqualTo(BarrierResponse.Action.DONE);
   }
 
+  /**
+   * DONE means stop pulling, so a released shard stops polling; nothing normative ever
+   * brings it back to a barrier. Its watermark is frozen at MAIN forever -- it can produce
+   * no retry work and holds no lease for expiry to depart -- so a quorum that counts it
+   * can never close once the fleet moves past MAIN.
+   */
+  @Test
+  void givenAReleasedShardThatStopsPolling_whenARetryFails_thenLaterQuorumsAdvanceWithoutIt() {
+    String sessionId = UUID.randomUUID().toString();
+    String className = "com.example.orders.ReleasedGoesSilentIT";
+    String mine = Ids.method(className, "mine");
+    String yours = Ids.method(className, "yours");
+    String flaky = Ids.method(className, "flaky");
+    List<String> census = List.of(mine, yours, flaky);
+    client.register(sessionId, registration(0, census));
+    client.register(sessionId, registration(1, census));
+    client.register(sessionId, registration(2, census));
+
+    Fence flakyFence = client.claimOne(sessionId, 2, flaky);
+    Fence mineFence = client.claimOne(sessionId, 0, mine);
+    client.result(sessionId, result(0, Pass.MAIN, mine, mineFence, Outcome.PASSED));
+    Fence yoursFence = client.claimOne(sessionId, 1, yours);
+    client.result(sessionId, result(1, Pass.MAIN, yours, yoursFence, Outcome.PASSED));
+
+    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.WAIT);
+    // Two waiters for at most one unit of retry work: shard 1 is surplus, released, and
+    // from here on it is never heard from again -- no poll, no depart.
+    assertThat(arrive(sessionId, 1, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.DONE);
+
+    client.result(sessionId, result(2, Pass.MAIN, flaky, flakyFence, Outcome.FAILED));
+    assertThat(arrive(sessionId, 2, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.DONE);
+    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.RUN);
+
+    ClaimResponse retry1 =
+        client.claim(sessionId, new ClaimRequest(0, Pass.RETRY1, className, census));
+    assertThat(retry1.granted()).hasSize(1);
+    client.result(
+        sessionId, result(0, Pass.RETRY1, flaky, retry1.granted().get(0).fence(), Outcome.FAILED));
+
+    // The retry1 quorum must resolve from the survivor alone: the released shard's frozen
+    // MAIN watermark must not hold it, or retry2 never runs and the fleet burns to its
+    // deadlines.
+    assertThat(arrive(sessionId, 0, Pass.RETRY1).action()).isEqualTo(BarrierResponse.Action.RUN);
+    ClaimResponse retry2 =
+        client.claim(sessionId, new ClaimRequest(0, Pass.RETRY2, className, census));
+    assertThat(retry2.granted()).hasSize(1);
+    client.result(
+        sessionId, result(0, Pass.RETRY2, flaky, retry2.granted().get(0).fence(), Outcome.PASSED));
+    assertThat(arrive(sessionId, 0, Pass.RETRY2).action()).isEqualTo(BarrierResponse.Action.DONE);
+
+    client.depart(sessionId, new DepartRequest(0));
+    SessionView view = client.view(sessionId);
+    assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.PASSED);
+    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
+  }
+
+  /**
+   * A shard that finishes green, polls once and dies silently holds no lease, so lease
+   * expiry -- the usual silent-death backstop -- can never fire for it. Only the mandated
+   * poll cadence says it is gone. Its stale watermark must not count it as a waiter,
+   * or the straggler that failed a unit is released as surplus against a corpse and the
+   * failure is never retried by anyone.
+   */
+  @Test
+  void givenAWaiterDiesSilentlyAtTheBarrier_whenTheStragglerArrives_thenItIsRetainedAndRuns()
+      throws Exception {
+    String sessionId = UUID.randomUUID().toString();
+    String className = "com.example.orders.DeadWaiterIT";
+    String green = Ids.method(className, "green");
+    String flaky = Ids.method(className, "flakyOnTheStraggler");
+    List<String> census = List.of(green, flaky);
+    client.register(sessionId, registration(0, census));
+    client.register(sessionId, registration(1, census));
+
+    // The straggler is busy with its unit for this whole scenario.
+    Fence flakyFence = client.claimOne(sessionId, 1, flaky);
+
+    Fence greenFence = client.claimOne(sessionId, 0, green);
+    client.result(sessionId, result(0, Pass.MAIN, green, greenFence, Outcome.PASSED));
+    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.WAIT);
+    // That poll was the last thing shard 0 ever said.
+
+    // The poll cadence is the liveness signal: once shard 0 has been silent for longer
+    // than the tolerated number of missed polls, the coordinator presumes it dead.
+    Instant deadline = Instant.now().plusSeconds(45);
+    while (client.view(sessionId).shards().stream()
+        .noneMatch(shard -> shard.shard() == 0 && shard.departed())) {
+      if (Instant.now().isAfter(deadline)) {
+        throw new AssertionError("Timed out waiting for the silent waiter to be presumed dead");
+      }
+      Thread.sleep(500);
+    }
+
+    client.result(sessionId, result(1, Pass.MAIN, flaky, flakyFence, Outcome.FAILED));
+    // The straggler is the only live shard: it must be retained and run its own retry,
+    // not be released against the corpse's watermark.
+    assertThat(arrive(sessionId, 1, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.RUN);
+
+    ClaimResponse retry =
+        client.claim(sessionId, new ClaimRequest(1, Pass.RETRY1, className, census));
+    assertThat(retry.granted()).hasSize(1);
+    assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
+    client.result(
+        sessionId, result(1, Pass.RETRY1, flaky, retry.granted().get(0).fence(), Outcome.PASSED));
+    assertThat(arrive(sessionId, 1, Pass.RETRY1).action()).isEqualTo(BarrierResponse.Action.DONE);
+
+    client.depart(sessionId, new DepartRequest(1));
+    SessionView view = client.view(sessionId);
+    assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.PASSED);
+    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
+  }
+
   @Test
   void givenMalformedOrUnknownBarrierCalls_whenPosted_thenRejectedWithoutSideEffects() {
     String unknownSession = UUID.randomUUID().toString();
@@ -323,23 +436,21 @@ class RetryBarrierIT {
 
   /**
    * The engine's loop, faithfully: claim and report the current pass, arrive at the
-   * barrier, poll while told to wait, run the next pass only on RUN, and stop pulling --
-   * while still walking the remaining passes -- on DONE.
+   * barrier, poll while told to wait, run the next pass only on RUN -- and on DONE stop
+   * pulling entirely, exactly as {@link BarrierResponse}'s contract says. A released
+   * shard never arrives at another barrier, so nothing here may depend on it doing so.
    */
   private static void engineLoop(
       String sessionId, int shard, List<String> census, AtomicInteger waitsObserved) {
-    boolean released = false;
     for (Pass pass : Pass.values()) {
-      if (!released) {
-        for (Map.Entry<String, List<String>> byClass : byClass(census).entrySet()) {
-          ClaimResponse claimed =
-              client.claim(
-                  sessionId,
-                  new ClaimRequest(shard, pass, byClass.getKey(), byClass.getValue()));
-          for (Grant grant : claimed.granted()) {
-            client.result(
-                sessionId, result(shard, pass, grant.testId(), grant.fence(), Outcome.PASSED));
-          }
+      for (Map.Entry<String, List<String>> byClass : byClass(census).entrySet()) {
+        ClaimResponse claimed =
+            client.claim(
+                sessionId,
+                new ClaimRequest(shard, pass, byClass.getKey(), byClass.getValue()));
+        for (Grant grant : claimed.granted()) {
+          client.result(
+              sessionId, result(shard, pass, grant.testId(), grant.fence(), Outcome.PASSED));
         }
       }
       BarrierResponse response;
@@ -349,7 +460,7 @@ class RetryBarrierIT {
         sleep(200);
       }
       if (response.action() == BarrierResponse.Action.DONE) {
-        released = true;
+        break;
       }
     }
     client.depart(sessionId, new DepartRequest(shard));
