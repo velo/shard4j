@@ -83,6 +83,7 @@ system properties) first, then environment variables (`shard.foo.bar` maps to
 | `shard.index` | yes | 0-based shard index. |
 | `shard.pass` | yes | `main` \| `retry1` \| `retry2`, one per execution block. |
 | `shard.attempt` | no (`1`) | Monotonic re-run counter; a higher value voids the previous attempt's leases. |
+| `shard.concurrency` | no (`1`) | Drain slots per shard: how many classes run at once in this JVM. Above 1, read the in-shard parallelism contract below. |
 | `shard.metadata.*` | no | Forwarded verbatim; the only seam CI-vendor vocabulary may pass through. |
 | `shard.coordinator.retry.budget` | no (`5m`) | Transport retry window; must exceed the coordinator deployment's restart time. |
 | `shard.deadline` | no | Absolute job-kill instant (ISO-8601); enables early self-release at the barrier. |
@@ -109,6 +110,37 @@ tolerance. The consequence is a premature presumed death: a degraded rebalance t
 self-heals on the shard's next call, so the outcome is red or correct, never a false
 green. The engine cannot close this gap, because the shard genuinely is not running
 during it.
+
+## In-shard parallelism
+
+`shard.concurrency` runs that many pull loops -- drain slots -- side by side in one shard
+JVM. Each slot asks the coordinator for a class, drains it completely, and runs it as its
+own nested execution, so `@BeforeAll` stays a once-per-class cost while two heavy classes
+overlap in wall time. The ask-and-drain step is serialised across slots and a class is
+fully leased before the next open ask, so the second slot receives the next-slowest
+remaining class -- cross-class slowest-first ordering is preserved, not degraded to
+whichever classes are adjacent. Parallelising *within* a class instead would buy almost
+nothing on real suites, where most of the duration mass sits in single-leaf classes.
+
+The default is `1`, which is byte-for-byte today's strictly serial behaviour. Nothing on
+the coordinator changes either way: a shard is one registration, one keepalive, one
+barrier arrival -- it reaches the barrier only after every slot has finished, so it stays
+exactly one unit of quorum arithmetic, and it can never be released while a slot still
+holds work. A transport death with several slots in flight NACKs everything every slot
+still holds.
+
+**The contract, above 1: your test classes must tolerate running concurrently with other
+classes in the same JVM.** The engine guarantees at most `shard.concurrency` classes in
+flight and never two live instances of the same class, but it cannot see your statics: a
+mutable static registry drained per class, a static client reassigned per `@BeforeAll`, a
+fixed port, a shared temp directory -- any of these makes concurrent classes unsafe, and
+the engine has no way to detect it. Audit for cross-class shared state before opting in;
+until then, stay at `1`.
+
+Orthogonally, Jupiter's own `junit.jupiter.execution.parallel.enabled` passes through to
+the nested executions and is tolerated: the engine's outcome accounting is thread-safe
+under concurrent events. It parallelises leaves inside one class-drain, which rarely
+helps a suite dominated by single-leaf classes, and the same shared-state caveats apply.
 
 ## Deployment
 
