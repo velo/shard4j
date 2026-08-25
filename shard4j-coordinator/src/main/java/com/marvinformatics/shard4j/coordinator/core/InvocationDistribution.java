@@ -5,7 +5,6 @@ import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -85,9 +84,10 @@ final class InvocationDistribution {
    * individually-leased invocation contributes its own position -- a skipped row at
    * duration zero, so a conditionally-skipped position stays in the plan instead of
    * silently leaving the hand-out -- and the breakdown is marked complete only once every
-   * measured position of the method has absorbed without failing. A probe that passes in
-   * MAIN is real growth: the next position is probed in the same session, so the plan
-   * walks the growth instead of discovering one row per run.
+   * measured position of the method has absorbed without failing. A probe that
+   * materialises at all is real growth -- passing, failing, skipping or aborting, it
+   * proved the position exists -- so the next position is probed in the same session and
+   * the plan walks the growth instead of discovering one row per run.
    */
   void recordDurations(String sessionId, Session session, ResultRequest request) {
     ClaimableUnit unit = session.unitOf(request.testId());
@@ -115,26 +115,32 @@ final class InvocationDistribution {
       }
       return;
     }
+    String censusId = unit.censusId();
+    // A probe that materialised is proof the set grew past the plan, whatever its outcome
+    // and whichever pass ran it -- a truly nonexistent position produces no result at all,
+    // only a vanished NACK. Chained before any outcome gate on purpose: an ABORTED probe
+    // absorbs green, and gating the walk on PASSED would halt discovery there, leaving
+    // every row past it silently unrun in every session.
+    if (unit.probe()) {
+      int next = unit.invocation() + 1;
+      boolean added =
+          session.addProbe(
+              new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true));
+      if (added) {
+        log.info(
+            "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
+            sessionId,
+            request.testId(),
+            next);
+      }
+    }
     if (request.outcome() != Outcome.PASSED && request.outcome() != Outcome.SKIPPED) {
       return;
     }
     long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
     durations.recordInvocation(key, sessionId, unit.invocation(), duration);
-    String censusId = unit.censusId();
     if (session.measuredUnitsAllNonFailing(censusId)) {
       durations.markInvocationsComplete(key, sessionId);
-    }
-    if (request.outcome() == Outcome.PASSED
-        && request.pass() == Pass.MAIN
-        && unit.probe()) {
-      int next = unit.invocation() + 1;
-      session.addProbe(
-          new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true));
-      log.info(
-          "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
-          sessionId,
-          request.testId(),
-          next);
     }
   }
 

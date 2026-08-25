@@ -211,17 +211,18 @@ final class Session {
   }
 
   /**
-   * A probe passed, so the parameter set grew past everything recorded: the next position
-   * becomes a probe in turn, and the hand-out walks the growth one position at a time
-   * within the same session. Added only once, and only while the method still exists in
-   * this census.
+   * A probe materialised, so the parameter set grew past everything recorded: the next
+   * position becomes a probe in turn, and the hand-out walks the growth one position at a
+   * time within the same session. Added only once, and only while the method still exists
+   * in this census; returns whether this call was the one that added it.
    */
-  void addProbe(ClaimableUnit unit) {
+  boolean addProbe(ClaimableUnit unit) {
     if (units.containsKey(unit.id()) || !registered.contains(unit.censusId())) {
-      return;
+      return false;
     }
     units.put(unit.id(), new UnitState(unit));
     unitsByCensusId.get(unit.censusId()).add(unit.id());
+    return true;
   }
 
   /**

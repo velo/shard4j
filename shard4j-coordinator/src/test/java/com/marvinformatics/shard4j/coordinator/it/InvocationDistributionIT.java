@@ -38,6 +38,7 @@ class InvocationDistributionIT {
   private static final String TEMPLATE = Ids.template(CLASS_NAME, "rows(java.lang.String)");
   private static final String FRESH = Ids.template(CLASS_NAME, "freshRows(java.lang.String)");
   private static final String DRIFTING = Ids.template(CLASS_NAME, "driftingRows(java.lang.String)");
+  private static final String GROWING = Ids.template(CLASS_NAME, "growingRows(java.lang.String)");
 
   static GenericContainer<?> coordinator;
   static CoordinatorClient client;
@@ -48,6 +49,7 @@ class InvocationDistributionIT {
     History.seedTemplate(
         dataDir, TEMPLATE, Map.of(1, 40_000L, 2, 50_000L, 3, 60_000L, 4, 70_000L));
     History.seedTemplate(dataDir, DRIFTING, Map.of(1, 30_000L, 2, 35_000L, 3, 45_000L));
+    History.seedTemplate(dataDir, GROWING, Map.of(1, 10_000L, 2, 20_000L));
     coordinator = CoordinatorContainers.coordinator(dataDir, Map.of());
     coordinator.start();
     client = new CoordinatorClient(coordinator);
@@ -102,6 +104,38 @@ class InvocationDistributionIT {
     assertThat(view.tests())
         .allSatisfy(test -> assertThat(test.state()).isEqualTo(TestState.PASSED));
     assertThat(shardsThatRan(view, TEMPLATE)).containsExactlyInAnyOrder(0, 1);
+  }
+
+  @Test
+  void givenAProbeThatAborts_whenItsResultArrives_thenTheGrowthWalkStillAdvances() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(GROWING), null));
+
+    // A lone shard takes both measured positions plus the probe at #3.
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    assertThat(next.granted().stream().map(Grant::testId))
+        .containsExactly(
+            Ids.invocation(GROWING, 2), Ids.invocation(GROWING, 1), Ids.invocation(GROWING, 3));
+
+    reportPassed(sessionId, 0, next.granted().subList(0, 2));
+    // The probe materialised -- the parameter set grew to at least three rows -- but the
+    // new row aborts on an assumption. A materialised probe is proof of growth whatever
+    // its outcome, so the walk must advance to #4; halting here would leave any row past
+    // the aborting one unrun in every session, forever.
+    report(
+        sessionId,
+        0,
+        next.granted().get(2),
+        Outcome.ABORTED,
+        "assumption failed: staging quota exhausted");
+
+    assertThat(client.view(sessionId).tests().stream().map(SessionView.TestView::testId))
+        .contains(Ids.invocation(GROWING, 4));
+
+    // And the new probe is claimable in the same pass: the shard's next ask receives it.
+    NextClassResponse walked = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    assertThat(walked.granted().stream().map(Grant::testId))
+        .containsExactly(Ids.invocation(GROWING, 4));
   }
 
   @Test
