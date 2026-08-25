@@ -46,10 +46,11 @@ class InertEngineIT {
     Launcher launcher = LauncherFactory.create();
     launcher.execute(request, listener);
 
-    // hello + 3 rows of each() + countsStock + needsLocalWarehouse + 3 rows of
-    // findsProducts: 9 test starts, every one under Jupiter, no duplicates.
-    assertThat(started).hasSize(9);
-    assertThat(started).doesNotHaveDuplicates();
-    assertThat(started).allMatch(id -> id.startsWith("[engine:junit-jupiter]"));
+    assertThat(started)
+            // hello + 3 rows of each() + countsStock + needsLocalWarehouse + 3 rows of
+            // findsProducts: 9 test starts, every one under Jupiter, no duplicates.
+            .hasSize(9)
+            .doesNotHaveDuplicates()
+            .allMatch(id -> id.startsWith("[engine:junit-jupiter]"));
   }
 }

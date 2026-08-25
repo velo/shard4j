@@ -1,6 +1,6 @@
 package com.example.orders;
 
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.assertj.core.api.Assertions.fail;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Tag;

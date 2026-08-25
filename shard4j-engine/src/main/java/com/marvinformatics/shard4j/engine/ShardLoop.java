@@ -188,7 +188,7 @@ final class ShardLoop {
         jupiter.discoverIds(
             leased,
             request.getConfigurationParameters(),
-            request.getOutputDirectoryProvider());
+            request.getOutputDirectoryCreator());
     UnitOutcomeListener listener =
         new UnitOutcomeListener(
             request.getEngineExecutionListener(),

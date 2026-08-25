@@ -75,6 +75,6 @@ class SlowestFirstOrderingIT {
     expected.add(SLOW);
     expected.add(MID);
     expected.add(FAST);
-    assertThat(grantedOrder).isEqualTo(expected);
+    assertThat(grantedOrder).containsExactlyElementsOf(expected);
   }
 }

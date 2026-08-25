@@ -19,7 +19,7 @@ class LivenessKeepaliveTest {
 
   @Test
   void givenAPingBlockedLikeASocketRead_whenStopping_thenStopReturnsOnlyAfterThePingCompletes()
-      throws InterruptedException {
+      throws Exception {
     CountDownLatch pingStarted = new CountDownLatch(1);
     CountDownLatch releasePing = new CountDownLatch(1);
     AtomicInteger pings = new AtomicInteger();

@@ -26,7 +26,7 @@ those, that step is wrong.
 | `shard4j-coordinator` | 25 |
 
 The two published libraries land on **someone else's classpath**. `shard4j-engine` in
-particular ends up on every consumer's test classpath, and it pins JUnit Platform 1.13,
+particular ends up on every consumer's test classpath, and it pins JUnit Platform 1.14,
 whose own floor is 17. Raising the engine to 21 or 25 would gate adoption of a test-sharding
 library on a JDK the adopting project may not run yet -- the cost lands on the consumer,
 not on us, which is exactly the wrong place for it.
@@ -113,6 +113,49 @@ is genuinely impossible -- never for convenience.
 `shard4j-protocol` is pure logic with no I/O, which is why its 258 tests need neither a
 server nor a mock. That is the exception its nature earns, not the pattern to copy: the
 coordinator must be tested as a real running server in Docker.
+
+Assertions are AssertJ. `org.junit.jupiter.api.Assertions` is not a second house style --
+it is what the OpenRewrite profile below converts away from.
+
+## Mechanised best practice
+
+```
+mvn -Popenrewrite verify    # rewrites sources in place, then review the diff
+mvn verify                  # prove the rewrite still compiles and passes
+```
+
+Off by default, like `release`: the everyday build stays fast and offline. The recipes are
+AssertJ and Jupiter hygiene over the test sources, plus the language level each module is
+entitled to -- `UpgradeToJava17` everywhere, `UpgradeToJava25` in the coordinator, tracking
+the baselines table above through the `rewrite.java.recipe` property. The coordinator adds
+the Spring Boot 4 recipes in its own copy of the profile, because it is the one module that
+has ever heard of Spring.
+
+Two constraints are worth knowing before editing that profile:
+
+- **pom.xml is excluded from every execution.** The recipes would otherwise "fix" the two
+  things this build pins on purpose: the per-module `release` indirection and the JUnit
+  Platform floor. Dependency and plugin versions move by human decision, or by Dependabot.
+- **The test recipes must not reach `src/main/java`.** `Assertj` chains in
+  `JUnit5BestPractices`, which chains in the JUnit Platform upgrade; `shard4j-engine`
+  *implements* that Platform SPI in its main sources, so a blanket run rewrites the engine
+  against an API its own classpath may not carry. That is why there are two executions and
+  not one.
+
+## Dependency updates
+
+Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves them and
+queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the gate
+-- module boundary, forbiddenapis, the coordinated failsafe profile against a live
+coordinator, and the container smoke test all run before anything merges.
+
+Two settings live in the repository rather than the tree, and the workflow is inert without
+them: "Allow auto-merge" must be on, and `main` must require the `build.yml` checks.
+Without required checks, `--auto` degrades to merging on the spot.
+
+`org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
+They are what set the engine's release-17 floor, and a bot must not be the thing that moves
+it.
 
 ## Repository hygiene
 

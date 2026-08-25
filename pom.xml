@@ -52,13 +52,20 @@
     <maven.compiler.release>17</maven.compiler.release>
     <coordinator.compiler.release>25</coordinator.compiler.release>
 
-    <!-- JUnit Platform 1.13.x is the engine's floor and the reason the shipped
+    <!-- The language-level recipe has to track the table above: a recipe that rewrote
+         the engine's sources into Java 25 idiom would produce code its own release
+         level then refuses to compile. -->
+    <rewrite.java.recipe>org.openrewrite.java.migrate.UpgradeToJava17</rewrite.java.recipe>
+    <coordinator.rewrite.java.recipe>org.openrewrite.java.migrate.UpgradeToJava25</coordinator.rewrite.java.recipe>
+
+    <!-- JUnit Platform 1.14.x is the engine's floor and the reason the shipped
          baseline is 17 rather than something newer. -->
-    <junit.bom.version>5.13.4</junit.bom.version>
+    <junit.bom.version>5.14.4</junit.bom.version>
     <feign.version>13.14</feign.version>
     <lombok.version>1.18.46</lombok.version>
     <jackson.version>2.22.2</jackson.version>
     <spring-boot.version>4.1.1</spring-boot.version>
+    <assertj.version>3.27.6</assertj.version>
 
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
@@ -71,6 +78,11 @@
     <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
     <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
     <gpg.keyname>D82FF933653EB8EC483709C77E738F7E2A355AAE</gpg.keyname>
+
+    <rewrite-maven-plugin.version>6.46.1</rewrite-maven-plugin.version>
+    <rewrite-testing-frameworks.version>3.44.0</rewrite-testing-frameworks.version>
+    <rewrite-migrate-java.version>3.42.1</rewrite-migrate-java.version>
+    <rewrite-spring.version>6.37.1</rewrite-spring.version>
   </properties>
 
   <dependencyManagement>
@@ -167,6 +179,101 @@
   </build>
 
   <profiles>
+    <!-- Mechanised best-practice migration: AssertJ over hand-rolled JUnit asserts,
+         Jupiter hygiene, and the language level each module is entitled to.
+
+         `mvn -Popenrewrite verify` rewrites the sources in place; the changes land
+         after that run's tests, so review the diff and run a plain `mvn verify` to
+         see the result compile and pass.
+
+         pom.xml is excluded. The recipes would happily "fix" the
+         two things this build deliberately pins: the per-module `release` indirection
+         (section "Java baselines" in AGENTS.md) and the JUnit Platform 1.13 floor that
+         keeps the engine consumable on JDK 17. Dependency and plugin versions stay a
+         human decision here. -->
+    <profile>
+      <id>openrewrite</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.openrewrite.maven</groupId>
+            <artifactId>rewrite-maven-plugin</artifactId>
+            <version>${rewrite-maven-plugin.version}</version>
+
+            <dependencies>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-testing-frameworks</artifactId>
+                <version>${rewrite-testing-frameworks.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-migrate-java</artifactId>
+                <version>${rewrite-migrate-java.version}</version>
+              </dependency>
+            </dependencies>
+
+            <executions>
+              <!-- The two executions differ only in which source set they touch, and
+                   that separation is load-bearing rather than cosmetic. `Assertj`
+                   chains in JUnit5BestPractices, which chains in UpgradeToJUnit514,
+                   which renames `OutputDirectoryProvider` to `OutputDirectoryCreator`.
+                   shard4j-engine *implements* that Platform SPI in its main sources
+                   against the deliberately pinned 1.13, so letting the test recipes
+                   reach src/main/java rewrites the engine to an API that is not on its
+                   classpath and the build stops compiling. Merge these two and the
+                   engine breaks. -->
+              <execution>
+                <id>tests</id>
+                <goals>
+                  <goal>runNoFork</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <exportDatatables>true</exportDatatables>
+                  <activeRecipes>
+                    <!-- `Assertj` already chains in MigrateHamcrestToAssertJ,
+                         JUnitToAssertj and JUnit5BestPractices, plus the assertion
+                         simplifications that turn isEqualTo(0) into isZero() and
+                         friends. The junit5 entries below are the ones it does not
+                         reach. -->
+                    <recipe>org.openrewrite.java.testing.assertj.Assertj</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.AssertToAssertions</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.AssertThrowsOnLastStatement</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.LifecycleNonPrivate</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.TempDirNonFinal</recipe>
+                    <recipe>org.openrewrite.java.testing.junit5.CleanupJUnitImports</recipe>
+                    <recipe>${rewrite.java.recipe}</recipe>
+                  </activeRecipes>
+                  <exclusions>
+                    <exclusion>**/src/main/java/**</exclusion>
+                    <exclusion>pom.xml</exclusion>
+                  </exclusions>
+                </configuration>
+              </execution>
+              <execution>
+                <id>sources</id>
+                <goals>
+                  <goal>runNoFork</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <exportDatatables>true</exportDatatables>
+                  <activeRecipes>
+                    <recipe>${rewrite.java.recipe}</recipe>
+                  </activeRecipes>
+                  <exclusions>
+                    <exclusion>**/src/test/java/**</exclusion>
+                    <exclusion>pom.xml</exclusion>
+                  </exclusions>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!-- Everything Central requires beyond the plain jar: sources, javadoc and GPG
          signatures, published through the Central Portal. Kept in a profile so the
          everyday build stays fast and offline. -->

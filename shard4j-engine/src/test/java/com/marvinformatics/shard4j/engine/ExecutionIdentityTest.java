@@ -1,8 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import java.nio.file.Path;
@@ -19,10 +18,10 @@ import org.junit.platform.engine.DiscoverySelector;
 import org.junit.platform.engine.EngineDiscoveryRequest;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
+import org.junit.platform.engine.OutputDirectoryCreator;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.UniqueId;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
-import org.junit.platform.engine.reporting.OutputDirectoryProvider;
 import org.junit.platform.engine.support.store.Namespace;
 import org.junit.platform.engine.support.store.NamespacedHierarchicalStore;
 
@@ -59,7 +58,7 @@ class ExecutionIdentityTest {
             engineRoot,
             capture,
             request.getConfigurationParameters(),
-            request.getOutputDirectoryProvider(),
+            request.getOutputDirectoryCreator(),
             new NamespacedHierarchicalStore<Namespace>(
                 new NamespacedHierarchicalStore<Namespace>(null))));
   }
@@ -76,9 +75,10 @@ class ExecutionIdentityTest {
   void theExecutionIdIsTheDescriptorsUniqueIdVerbatim() {
     TestDescriptor hello = descriptor("/[method:hello()]");
 
-    assertEquals(
-        new ExecutionId(hello.getUniqueId().toString()), ExecutionIdentity.executionId(hello));
-    assertEquals(CLASS_PREFIX + "/[method:hello()]", ExecutionIdentity.executionId(hello).value());
+    assertThat(ExecutionIdentity.executionId(hello))
+        .isEqualTo(new ExecutionId(hello.getUniqueId().toString()));
+    assertThat(ExecutionIdentity.executionId(hello).value())
+        .isEqualTo(CLASS_PREFIX + "/[method:hello()]");
   }
 
   @Test
@@ -89,7 +89,7 @@ class ExecutionIdentityTest {
       nested = nested.append(segment);
     }
 
-    assertEquals(wire.toString(), ExecutionIdentity.executionId(nested).value());
+    assertThat(ExecutionIdentity.executionId(nested).value()).isEqualTo(wire.toString());
   }
 
   @Test
@@ -99,21 +99,18 @@ class ExecutionIdentityTest {
             .appendEngine("junit-vintage")
             .append("class", SAMPLE);
 
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class, () -> ExecutionIdentity.executionId(vintage));
-
-    assertTrue(thrown.getMessage().contains(vintage.toString()));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> ExecutionIdentity.executionId(vintage))
+        .withMessageContaining(vintage.toString());
   }
 
   @Test
   void refusesAJupiterRootedIdWhoseFirstSegmentIsNotAClass() {
     UniqueId runner = UniqueId.forEngine("junit-jupiter").append("runner", SAMPLE);
 
-    IllegalArgumentException thrown =
-        assertThrows(IllegalArgumentException.class, () -> ExecutionIdentity.executionId(runner));
-
-    assertTrue(thrown.getMessage().contains("[class:"));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> ExecutionIdentity.executionId(runner))
+        .withMessageContaining("[class:");
   }
 
   @Test
@@ -121,17 +118,19 @@ class ExecutionIdentityTest {
     TestDescriptor hello = descriptor("/[method:hello()]");
     TestDescriptor template = descriptor("/[test-template:each(java.lang.String)]");
 
-    assertEquals(ExecutionIdentity.executionId(hello), ExecutionIdentity.leaseId(hello));
-    assertEquals(ExecutionIdentity.executionId(template), ExecutionIdentity.leaseId(template));
+    assertThat(ExecutionIdentity.leaseId(hello)).isEqualTo(ExecutionIdentity.executionId(hello));
+    assertThat(ExecutionIdentity.leaseId(template))
+        .isEqualTo(ExecutionIdentity.executionId(template));
   }
 
   @Test
   void anInvocationsLeaseIsItsTemplate() {
     TestDescriptor template = descriptor("/[test-template:each(java.lang.String)]");
 
-    assertEquals(3, invocations.size(), "the sample template must have really run");
+    assertThat(invocations).as("the sample template must have really run").hasSize(3);
     for (TestDescriptor invocation : invocations) {
-      assertEquals(ExecutionIdentity.executionId(template), ExecutionIdentity.leaseId(invocation));
+      assertThat(ExecutionIdentity.leaseId(invocation))
+          .isEqualTo(ExecutionIdentity.executionId(template));
     }
   }
 
@@ -149,8 +148,8 @@ class ExecutionIdentityTest {
         ExecutionIdentity.underEngineRoot(
             UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID), wire);
 
-    assertTrue(handedBack.hasPrefix(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID)));
-    assertEquals(wire, ExecutionIdentity.executionId(handedBack));
+    assertThat(handedBack.hasPrefix(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID))).isTrue();
+    assertThat(ExecutionIdentity.executionId(handedBack)).isEqualTo(wire);
   }
 
   /**
@@ -196,8 +195,8 @@ class ExecutionIdentityTest {
     }
 
     @Override
-    public OutputDirectoryProvider getOutputDirectoryProvider() {
-      return new OutputDirectoryProvider() {
+    public OutputDirectoryCreator getOutputDirectoryCreator() {
+      return new OutputDirectoryCreator() {
         @Override
         public Path getRootDirectory() {
           return Path.of("target");

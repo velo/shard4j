@@ -1,7 +1,7 @@
 package com.marvinformatics.shard4j.protocol;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -20,14 +20,15 @@ class ExecutionIdTest {
     String wire =
         "[engine:junit-jupiter]/[class:com.example.orders.PingResourceIT]/[method:hello()]";
 
-    assertEquals(wire, new ExecutionId(wire).value());
-    assertEquals(new ExecutionId(wire), new ExecutionId(wire));
+    assertThat(new ExecutionId(wire).value()).isEqualTo(wire);
+    assertThat(new ExecutionId(wire)).isEqualTo(new ExecutionId(wire));
   }
 
   @ParameterizedTest
   @NullAndEmptySource
   @ValueSource(strings = {" ", "\t"})
   void refusesABlankId(String blank) {
-    assertThrows(IllegalArgumentException.class, () -> new ExecutionId(blank));
+    assertThatExceptionOfType(IllegalArgumentException.class)
+        .isThrownBy(() -> new ExecutionId(blank));
   }
 }

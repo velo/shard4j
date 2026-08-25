@@ -22,7 +22,6 @@
     <maven.source.skip>true</maven.source.skip>
     <maven.javadoc.skip>true</maven.javadoc.skip>
     <gpg.skip>true</gpg.skip>
-    <assertj.version>3.27.6</assertj.version>
     <testcontainers.version>1.21.3</testcontainers.version>
   </properties>
 

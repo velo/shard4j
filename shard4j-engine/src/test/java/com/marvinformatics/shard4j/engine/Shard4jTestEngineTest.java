@@ -104,7 +104,7 @@ class Shard4jTestEngineTest {
             root,
             listener,
             request.getConfigurationParameters(),
-            EngineTestHarness.outerRequest(listener).getOutputDirectoryProvider(),
+            EngineTestHarness.outerRequest(listener).getOutputDirectoryCreator(),
             EngineTestHarness.outerRequest(listener).getStore()));
 
     assertThat(finished).containsExactly(target);
