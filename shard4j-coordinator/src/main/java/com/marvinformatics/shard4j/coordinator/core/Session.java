@@ -143,6 +143,11 @@ final class Session {
     };
   }
 
+  /** Every census unit the given pass could grant right now, in registration order. */
+  List<String> claimable(Pass pass) {
+    return units.keySet().stream().filter(testId -> claimableIn(testId, pass)).toList();
+  }
+
   Pass completedPassOf(int shard) {
     ShardInfo info = shards.get(shard);
     return info == null ? null : info.completedPass;

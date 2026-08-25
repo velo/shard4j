@@ -9,6 +9,8 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.DepartResponse;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -40,6 +42,12 @@ public class SessionController {
   @PostMapping("/sessions/{sessionId}/claims")
   public ClaimResponse claim(@PathVariable String sessionId, @RequestBody ClaimRequest request) {
     return core.claim(sessionId, request);
+  }
+
+  @PostMapping("/sessions/{sessionId}/next")
+  public NextClassResponse next(
+      @PathVariable String sessionId, @RequestBody NextClassRequest request) {
+    return core.nextClass(sessionId, request);
   }
 
   @PostMapping("/sessions/{sessionId}/results")

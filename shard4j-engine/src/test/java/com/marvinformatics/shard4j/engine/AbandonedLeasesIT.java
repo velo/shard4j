@@ -4,14 +4,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.Grant;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,8 +46,21 @@ class AbandonedLeasesIT {
   private static GenericContainer<?> coordinator;
 
   @BeforeAll
-  static void start() {
-    coordinator = CoordinatorContainer.start();
+  static void seedThenStart() throws IOException {
+    // The template gets a measured duration so the no-history PLAIN units are
+    // deterministically handed out first, putting the ghost's lease outstanding by the
+    // time the second open ask dies.
+    Path dataDir = CoordinatorContainer.newDataDir();
+    Path historyDir = dataDir.resolve("orders-service").resolve("history");
+    Files.createDirectories(historyDir);
+    Files.writeString(
+        historyDir.resolve(LocalDate.now(ZoneOffset.UTC) + ".jsonl"),
+        "{\"type\":\"COMPLETION\",\"project\":\"example/orders-service\","
+            + "\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
+            + TEMPLATE
+            + "\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\","
+            + "\"durationMs\":9000,\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n");
+    coordinator = CoordinatorContainer.start(Map.of(), dataDir);
   }
 
   @AfterAll
@@ -66,21 +85,22 @@ class AbandonedLeasesIT {
             null,
             true);
     // The ghost never produces an outcome, so its lease is still outstanding when the
-    // next class's claim dies -- the exact state a mid-pass abnormal exit strands.
+    // second open ask dies -- the exact state a mid-pass abnormal exit strands.
     DiscoveredCensus census =
         DiscoveredCensus.of(
             List.of(
                 new DiscoveredCensus.ClassUnits(
                     PLAIN, List.of(new ExecutionId(PASSES), new ExecutionId(GHOST))),
                 new DiscoveredCensus.ClassUnits(ROWS, List.of(new ExecutionId(TEMPLATE)))));
+    AtomicInteger openAsks = new AtomicInteger();
     CoordinatorGateway gateway =
         new CoordinatorGateway(configuration, census.unitIds()) {
           @Override
-          synchronized List<Grant> claim(String className, List<String> candidates) {
-            if (className.equals(ROWS)) {
+          synchronized NextClassResponse nextClass() {
+            if (openAsks.incrementAndGet() == 2) {
               throw new IllegalStateException("simulated transport failure: retry budget spent");
             }
-            return super.claim(className, candidates);
+            return super.nextClass();
           }
         };
     ShardLoop loop =

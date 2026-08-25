@@ -11,6 +11,8 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
@@ -98,6 +100,20 @@ class CoordinatorGateway {
             + epoch
             + ")");
     return epoch;
+  }
+
+  /**
+   * The open ask: the coordinator names the class this shard should drain next, first
+   * batch of leases included. The shard brings no candidates -- registration already gave
+   * the coordinator the census, and which class comes next is exactly the decision this
+   * call exists to hand over.
+   */
+  synchronized NextClassResponse nextClass() {
+    return withSession(
+        () ->
+            api.next(
+                configuration.sessionId(),
+                new NextClassRequest(configuration.shardIndex(), configuration.pass())));
   }
 
   synchronized List<Grant> claim(String className, List<String> candidates) {

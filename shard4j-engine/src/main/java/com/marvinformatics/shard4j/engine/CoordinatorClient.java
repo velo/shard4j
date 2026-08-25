@@ -6,6 +6,8 @@ import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.NackRequest;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -33,6 +35,9 @@ public interface CoordinatorClient {
 
   @RequestLine("POST /sessions/{sessionId}/claims")
   ClaimResponse claim(@Param("sessionId") String sessionId, ClaimRequest request);
+
+  @RequestLine("POST /sessions/{sessionId}/next")
+  NextClassResponse next(@Param("sessionId") String sessionId, NextClassRequest request);
 
   @RequestLine("POST /sessions/{sessionId}/results")
   void result(@Param("sessionId") String sessionId, ResultRequest request);
