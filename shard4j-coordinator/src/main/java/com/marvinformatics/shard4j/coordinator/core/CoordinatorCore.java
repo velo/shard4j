@@ -162,11 +162,12 @@ public final class CoordinatorCore {
         session.touch(now);
         return new ClaimResponse(List.of());
       }
-      List<String> claimable =
+      List<CensusUnit> claimable =
           request.candidates().stream()
               .filter(candidate -> session.claimableIn(candidate, request.pass()))
+              .map(session::unitOf)
               .toList();
-      List<String> ordered = ClaimOrdering.order(claimable, durations::estimate);
+      List<CensusUnit> ordered = ClaimOrdering.order(claimable, durations::estimate);
       List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
@@ -177,7 +178,8 @@ public final class CoordinatorCore {
    * The open ask -- "what do I run next?" -- which is where cross-class slowest-first
    * actually lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class
    * of the top-ranked unit is the answer, and that class's first capped batch is leased in
-   * the same locked breath so a named class is never an empty promise. Ranking whole units
+   * the same locked breath so a named class is never an empty promise. The pool arrives
+   * already parsed, so ranking it costs no id surgery. Ranking whole units
    * rather than class aggregates means the fixed unit rules extend across classes for
    * free: a class holding a no-history unit outranks every fully-measured class, in the
    * pinned hash order of its unknowns, and known classes follow by their slowest remaining
@@ -195,15 +197,15 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<String> ordered =
+      List<CensusUnit> ordered =
           ClaimOrdering.order(session.claimable(request.pass()), durations::estimate);
       if (ordered.isEmpty()) {
         joinLogged(sessionId, session, request.shard(), now);
         return new NextClassResponse(null, List.of());
       }
-      String className = classNameOf(ordered.get(0));
-      List<String> inChosenClass =
-          ordered.stream().filter(testId -> className.equals(classNameOf(testId))).toList();
+      String className = ordered.get(0).className();
+      List<CensusUnit> inChosenClass =
+          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
       List<Grant> granted =
           grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
       joinLogged(sessionId, session, request.shard(), now);
@@ -213,20 +215,15 @@ public final class CoordinatorCore {
 
   /** Leases the capped prefix of an already-ordered claimable list. */
   private List<Grant> grantCapped(
-      Session session, int shard, Pass pass, List<String> ordered, Instant now) {
+      Session session, int shard, Pass pass, List<CensusUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
-    for (String testId : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
+    for (CensusUnit unit : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
       Fence fence = new Fence(session.epoch(), incarnation, ++seq);
       Instant expiresAt = now.plus(leaseTtl);
-      session.lease(testId, shard, pass, fence, now, expiresAt);
-      granted.add(new Grant(testId, fence, expiresAt));
+      session.lease(unit.id(), shard, pass, fence, now, expiresAt);
+      granted.add(new Grant(unit.id(), fence, expiresAt));
     }
     return granted;
-  }
-
-  private static String classNameOf(String testId) {
-    int start = testId.indexOf("[class:") + "[class:".length();
-    return testId.substring(start, testId.indexOf(']', start));
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {

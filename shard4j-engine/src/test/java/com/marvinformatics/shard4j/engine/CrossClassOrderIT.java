@@ -9,12 +9,8 @@ import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,19 +38,17 @@ class CrossClassOrderIT {
   private static GenericContainer<?> coordinator;
 
   @BeforeAll
-  static void seedThenStart() throws IOException {
+  static void seedThenStart() {
     Path dataDir = CoordinatorContainer.newDataDir();
-    Path historyDir = dataDir.resolve("orders-service").resolve("history");
-    Files.createDirectories(historyDir);
-    String today = LocalDate.now(ZoneOffset.UTC).toString();
-    Files.writeString(
-        historyDir.resolve(today + ".jsonl"),
-        seedLine(methodId(SLOW, "slowest"), 300_000)
-            + seedLine(methodId(SLOW, "slower"), 250_000)
-            + seedLine(methodId(MID, "mid"), 120_000)
-            + seedLine(methodId(MID, "milder"), 100_000)
-            + seedLine(methodId(FAST, "fast"), 2_000)
-            + seedLine(methodId(FAST, "faster"), 1_000));
+    CoordinatorContainer.seedHistory(
+        dataDir,
+        Map.of(
+            methodId(SLOW, "slowest"), 300_000L,
+            methodId(SLOW, "slower"), 250_000L,
+            methodId(MID, "mid"), 120_000L,
+            methodId(MID, "milder"), 100_000L,
+            methodId(FAST, "fast"), 2_000L,
+            methodId(FAST, "faster"), 1_000L));
     coordinator = CoordinatorContainer.start(Map.of(), dataDir);
   }
 
@@ -105,7 +99,7 @@ class CrossClassOrderIT {
                 classUnits(FAST, "fast", "faster")));
 
     // Another shard takes the whole counted class and reports it before this shard runs.
-    CoordinatorContainer.ShardApi otherShard = CoordinatorContainer.shardApiOf(coordinator);
+    CoordinatorClient otherShard = CoordinatorContainer.shardApiOf(coordinator);
     otherShard.register(sessionId, new RegisterRequest(1, 1, Map.of(), census.unitIds()));
     List<Grant> taken =
         otherShard.claim(sessionId, new ClaimRequest(1, Pass.MAIN, counted, countedUnits)).granted();
@@ -158,14 +152,5 @@ class CrossClassOrderIT {
 
   private static String methodId(String className, String method) {
     return "[engine:junit-jupiter]/[class:" + className + "]/[method:" + method + "()]";
-  }
-
-  private static String seedLine(String testId, long durationMs) {
-    return "{\"type\":\"COMPLETION\",\"project\":\"example/orders-service\","
-        + "\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
-        + testId
-        + "\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\",\"durationMs\":"
-        + durationMs
-        + ",\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n";
   }
 }

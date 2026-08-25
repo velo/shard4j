@@ -14,8 +14,6 @@ import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -50,12 +48,7 @@ class NextClassIT {
   @BeforeAll
   static void seedThenStart() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "next-class-data");
-    Path historyDir = dataDir.resolve(CoordinatorContainers.TENANT_SLUG).resolve("history");
-    Files.createDirectories(historyDir);
-    String today = LocalDate.now(ZoneOffset.UTC).toString();
-    Files.writeString(
-        historyDir.resolve(today + ".jsonl"),
-        seedLine(BIG_CASE, 500_000) + seedLine(MID_CASE, 200_000) + seedLine(MIXED_SMALL, 10_000));
+    History.seed(dataDir, Map.of(BIG_CASE, 500_000L, MID_CASE, 200_000L, MIXED_SMALL, 10_000L));
 
     coordinator = CoordinatorContainers.coordinator(dataDir, Map.of());
     coordinator.start();
@@ -65,16 +58,6 @@ class NextClassIT {
   @AfterAll
   static void stop() {
     coordinator.stop();
-  }
-
-  private static String seedLine(String testId, long durationMs) {
-    return "{\"type\":\"COMPLETION\",\"project\":\""
-        + CoordinatorContainers.TENANT_KEY
-        + "\",\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
-        + testId
-        + "\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\",\"durationMs\":"
-        + durationMs
-        + ",\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n";
   }
 
   private static List<String> census() {

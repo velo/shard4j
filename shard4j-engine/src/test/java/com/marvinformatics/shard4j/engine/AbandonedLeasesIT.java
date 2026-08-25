@@ -8,12 +8,8 @@ import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -46,20 +42,13 @@ class AbandonedLeasesIT {
   private static GenericContainer<?> coordinator;
 
   @BeforeAll
-  static void seedThenStart() throws IOException {
+  static void seedThenStart() {
     // The template gets a measured duration so the no-history PLAIN units are
     // deterministically handed out first, putting the ghost's lease outstanding by the
-    // time the second open ask dies.
+    // time the second open ask dies. The first ask asserts that below, so this seed
+    // cannot quietly stop mattering.
     Path dataDir = CoordinatorContainer.newDataDir();
-    Path historyDir = dataDir.resolve("orders-service").resolve("history");
-    Files.createDirectories(historyDir);
-    Files.writeString(
-        historyDir.resolve(LocalDate.now(ZoneOffset.UTC) + ".jsonl"),
-        "{\"type\":\"COMPLETION\",\"project\":\"example/orders-service\","
-            + "\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
-            + TEMPLATE
-            + "\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\","
-            + "\"durationMs\":9000,\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n");
+    CoordinatorContainer.seedHistory(dataDir, Map.of(TEMPLATE, 9_000L));
     coordinator = CoordinatorContainer.start(Map.of(), dataDir);
   }
 
@@ -97,10 +86,14 @@ class AbandonedLeasesIT {
         new CoordinatorGateway(configuration, census.unitIds()) {
           @Override
           synchronized NextClassResponse nextClass() {
-            if (openAsks.incrementAndGet() == 2) {
+            if (openAsks.incrementAndGet() > 1) {
               throw new IllegalStateException("simulated transport failure: retry budget spent");
             }
-            return super.nextClass();
+            NextClassResponse first = super.nextClass();
+            // The seeded template duration is what puts PLAIN first; if that ever stops
+            // holding, the ghost is never leased and this test would pass vacuously.
+            assertThat(first.className()).isEqualTo(PLAIN);
+            return first;
           }
         };
     ShardLoop loop =

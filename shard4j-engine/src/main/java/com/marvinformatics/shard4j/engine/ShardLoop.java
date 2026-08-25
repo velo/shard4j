@@ -129,24 +129,18 @@ final class ShardLoop {
    * all: no nested discovery, no {@code @BeforeAll}, no class initialiser.
    */
   private void claimAndRunUntilDrained(DiscoveredCensus census) {
-    Map<String, DiscoveredCensus.ClassUnits> classesByName = new LinkedHashMap<>();
-    census.classes().forEach(entry -> classesByName.put(entry.className(), entry));
     while (true) {
       NextClassResponse next = gateway.nextClass();
       if (next.granted().isEmpty()) {
         return;
       }
+      // Tracked before the census is consulted: an unknown class name is a coordinator
+      // bug, and its grants are NACKed on the way out rather than left to the TTL.
       track(next.granted());
-      DiscoveredCensus.ClassUnits entry = classesByName.get(next.className());
-      if (entry == null) {
-        // Registration proved both sides hold the same census, so this is a coordinator
-        // bug; the tracked grants are NACKed on the way out rather than left to the TTL.
-        throw new ShardExecutionException(
-            "Granted a class this shard never registered: " + next.className());
-      }
+      DiscoveredCensus.ClassUnits entry = census.classNamed(next.className());
       List<Grant> drained = new ArrayList<>(next.granted());
       drained.addAll(drainClass(entry));
-      runBatch(drained);
+      runBatch(next.className(), drained);
     }
   }
 
@@ -181,14 +175,15 @@ final class ShardLoop {
     }
   }
 
-  private void runBatch(List<Grant> grants) {
+  private void runBatch(String className, List<Grant> grants) {
     Map<String, Grant> byUnit = new LinkedHashMap<>();
     grants.forEach(grant -> byUnit.put(grant.testId(), grant));
     // Order is the coordinator's schedule end to end: it chose this class over every
     // other on the open ask, and within the class the grants arrived slowest-first. The
     // nested discovery receives that order intact rather than re-shuffled by a
     // hash-ordered set.
-    List<ExecutionId> leased = byUnit.keySet().stream().map(ShardLoop::classRootedLease).toList();
+    List<ExecutionId> leased =
+        byUnit.keySet().stream().map(unitId -> classRootedLease(className, unitId)).toList();
     TestDescriptor batch =
         jupiter.discoverIds(
             leased,
@@ -209,11 +204,19 @@ final class ShardLoop {
    * granted unit the nested discovery could never resolve would be dropped in silence and
    * fall to reconciliation with a message blaming this engine, so a malformed grant fails
    * here naming what the coordinator actually sent.
+   *
+   * <p>The check is against the class the coordinator named, not merely against the
+   * Jupiter root, because the whole batch becomes one nested execution -- one class
+   * instance, one {@code @BeforeAll}. A grant from some other class would run there under
+   * the wrong setup, and nothing downstream could tell.
    */
-  private static ExecutionId classRootedLease(String unitId) {
-    if (!unitId.startsWith("[engine:junit-jupiter]/[class:")) {
+  private static ExecutionId classRootedLease(String className, String unitId) {
+    if (!unitId.startsWith("[engine:junit-jupiter]/[class:" + className + "]/")) {
       throw new ShardExecutionException(
-          "Granted a unit this engine could never have registered: " + unitId);
+          "Granted a unit outside the class the coordinator named ("
+              + className
+              + "), which this engine could never have registered as part of it: "
+              + unitId);
     }
     return new ExecutionId(unitId);
   }
