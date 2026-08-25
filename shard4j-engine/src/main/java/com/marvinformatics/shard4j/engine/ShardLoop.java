@@ -1,7 +1,6 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
-import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
@@ -121,21 +120,8 @@ final class ShardLoop {
    */
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
-        ledger.drainAll().stream()
-            .map(
-                grant ->
-                    new NackRequest.NackedLease(
-                        grant.testId(),
-                        grant.fence(),
-                        "Abandoned on shard "
-                            + configuration.shardIndex()
-                            + " (pass "
-                            + configuration.pass()
-                            + "): "
-                            + cause
-                            + "; returned to the pool",
-                        false))
-            .toList();
+        Reconciliation.abandoned(
+            ledger.drainAll(), configuration.shardIndex(), configuration.pass(), cause);
     if (nacks.isEmpty()) {
       return;
     }
@@ -310,67 +296,19 @@ final class ShardLoop {
   /**
    * The pass epilogue. A stale unique-id selector is dropped by the nested discovery in
    * complete silence -- no event, no error, clean exit -- so this drain is the only place
-   * a claimed-but-never-run unit can be noticed at all, and what it means depends on what
-   * was granted. A cardinality probe that never materialised is the expected answer --
-   * NACKed as vanished so the coordinator strikes it from the census, and nothing fails.
-   * A measured invocation that never materialised is parameter-set drift: the
-   * {@code @MethodSource} changed since the coordinator last measured this method, so the
-   * position was handed out optimistically and no longer exists -- NACKed as vanished so
-   * history drops the stale position, and the shard fails naming exactly that cause,
-   * because a run that silently skipped a once-real invocation must never look green.
-   * Anything else is a lease this engine cannot explain -- a bug in the engine, never a
-   * property of the suite -- NACKed back to the pool and failed as such.
+   * a claimed-but-never-run unit can be noticed at all. What each unexplained lease
+   * means, the wording of its NACK and the failure message are {@link Reconciliation}'s;
+   * this method drains, NACKs, and fails when the classification says so.
    */
   private void reconcileOrFail() {
     List<Grant> unexplained = ledger.drainAll();
     if (unexplained.isEmpty()) {
       return;
     }
-    List<NackRequest.NackedLease> nacks = new ArrayList<>();
-    List<String> driftedInvocations = new ArrayList<>();
-    List<String> unexplainable = new ArrayList<>();
-    for (Grant grant : unexplained) {
-      boolean invocation = invocationShaped(grant.testId());
-      if (invocation && grant.probe()) {
-        nacks.add(
-            new NackRequest.NackedLease(
-                grant.testId(),
-                grant.fence(),
-                "Cardinality probe past recorded history did not materialise on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "); the recorded parameter count still stands",
-                true));
-      } else if (invocation) {
-        nacks.add(
-            new NackRequest.NackedLease(
-                grant.testId(),
-                grant.fence(),
-                "Invocation no longer exists on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "): the parameter set changed since this invocation was last"
-                    + " measured; dropped from the plan and returned to the pool",
-                true));
-        driftedInvocations.add(grant.testId());
-      } else {
-        nacks.add(
-            new NackRequest.NackedLease(
-                grant.testId(),
-                grant.fence(),
-                "Leased but never produced a terminal outcome on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "); returned to the pool",
-                false));
-        unexplainable.add(grant.testId());
-      }
-    }
-    gateway.nack(nacks);
-    if (driftedInvocations.isEmpty() && unexplainable.isEmpty()) {
+    Reconciliation reconciliation =
+        Reconciliation.classify(unexplained, configuration.shardIndex(), configuration.pass());
+    gateway.nack(reconciliation.nacks());
+    if (reconciliation.failure() == null) {
       log.log(
           System.Logger.Level.INFO,
           "Shard "
@@ -379,29 +317,7 @@ final class ShardLoop {
               + " confirmed");
       return;
     }
-    StringBuilder message = new StringBuilder("Shard ").append(configuration.shardIndex());
-    if (!driftedInvocations.isEmpty()) {
-      message
-          .append(" was granted ")
-          .append(driftedInvocations.size())
-          .append(" invocation(s) that no longer exist -- the parameter set changed since")
-          .append(" they were last measured -- ")
-          .append(String.join(", ", driftedInvocations))
-          .append("; history has dropped them and the next run expands from the corrected")
-          .append(" plan");
-    }
-    if (!unexplainable.isEmpty()) {
-      if (!driftedInvocations.isEmpty()) {
-        message.append(". It also");
-      }
-      message
-          .append(" could not reconcile ")
-          .append(unexplainable.size())
-          .append(" leased unit(s) to a terminal outcome; they were NACKed back to the")
-          .append(" pool: ")
-          .append(String.join(", ", unexplainable));
-    }
-    throw new ShardExecutionException(message.toString());
+    throw new ShardExecutionException(reconciliation.failure());
   }
 
   /**
@@ -494,14 +410,5 @@ final class ShardLoop {
   private static String classNameOf(String unitId) {
     int start = unitId.indexOf("[class:") + "[class:".length();
     return unitId.substring(start, unitId.indexOf(']', start));
-  }
-
-  /** The one grammar decides; a shape it cannot parse falls to the unexplained arm. */
-  private static boolean invocationShaped(String unitId) {
-    try {
-      return CensusUnit.parse(unitId).invocation() != null;
-    } catch (IllegalArgumentException notClaimable) {
-      return false;
-    }
   }
 }
