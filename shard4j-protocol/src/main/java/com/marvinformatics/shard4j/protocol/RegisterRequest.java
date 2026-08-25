@@ -15,6 +15,10 @@ import java.util.Map;
  * @param metadata uninterpreted string map, the single seam through which CI-vendor
  *     vocabulary reaches the wire
  * @param tests lease units only, never invocation ids
+ * @param shardCount how many shards this run launched, when the consumer knows it; null
+ *     when it does not. Purely a balancing hint: it lets the coordinator hold back a fair
+ *     share of a template's invocations for shards that have not registered yet, instead
+ *     of granting them all to whichever shard asked first. Never part of any quorum.
  */
 public record RegisterRequest(
-    int shard, int attempt, Map<String, String> metadata, List<String> tests) {}
+    int shard, int attempt, Map<String, String> metadata, List<String> tests, Integer shardCount) {}
