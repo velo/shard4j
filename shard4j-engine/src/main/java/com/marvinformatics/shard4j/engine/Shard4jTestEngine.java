@@ -94,6 +94,13 @@ public class Shard4jTestEngine implements TestEngine {
     } catch (RuntimeException e) {
       log.log(System.Logger.Level.ERROR, "Shard execution failed", e);
       listener.executionFinished(root, TestExecutionResult.failed(e));
+    } catch (Error e) {
+      // An Error must still propagate -- the JVM may be dying -- but never past an
+      // unfinished root: a started-and-never-finished engine node is how a crashed shard
+      // would masquerade as a hung one in the build tool's report.
+      log.log(System.Logger.Level.ERROR, "Shard execution failed", e);
+      listener.executionFinished(root, TestExecutionResult.failed(e));
+      throw e;
     }
   }
 

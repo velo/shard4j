@@ -146,8 +146,8 @@ class UnitOutcomeListenerTest {
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
 
     // The stale id was dropped in complete silence -- the real unit ran, nothing errored,
-    // and only the listener's own ledger knows a claimed unit never happened.
+    // and the ghost produced no outcome at all. ShardLoop's reconciliation ledger is what
+    // turns that silence into a NACK and a loud failure; ReconciliationIT pins it.
     assertThat(results).containsOnlyKeys(method(PLAIN, "passes()"));
-    assertThat(listener.unitsWithoutOutcome()).containsExactly(ghost);
   }
 }

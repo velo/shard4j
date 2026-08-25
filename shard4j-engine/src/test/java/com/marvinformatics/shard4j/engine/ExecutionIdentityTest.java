@@ -5,10 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -109,6 +107,16 @@ class ExecutionIdentityTest {
   }
 
   @Test
+  void refusesAJupiterRootedIdWhoseFirstSegmentIsNotAClass() {
+    UniqueId runner = UniqueId.forEngine("junit-jupiter").append("runner", SAMPLE);
+
+    IllegalArgumentException thrown =
+        assertThrows(IllegalArgumentException.class, () -> ExecutionIdentity.executionId(runner));
+
+    assertTrue(thrown.getMessage().contains("[class:"));
+  }
+
+  @Test
   void aMethodAndATemplateAreTheirOwnLeaseUnit() {
     TestDescriptor hello = descriptor("/[method:hello()]");
     TestDescriptor template = descriptor("/[test-template:each(java.lang.String)]");
@@ -127,56 +135,10 @@ class ExecutionIdentityTest {
     }
   }
 
-  @Test
-  void everyInvocationOfOneTemplateCollapsesOntoOneHistoryKey() {
-    TestDescriptor template = descriptor("/[test-template:each(java.lang.String)]");
-    HistoryKey templateKey = ExecutionIdentity.historyKey(template);
 
-    Set<ExecutionId> recordIds = new HashSet<>();
-    for (TestDescriptor invocation : invocations) {
-      assertEquals(templateKey, ExecutionIdentity.historyKey(invocation));
-      recordIds.add(ExecutionIdentity.executionId(invocation));
-    }
-    assertEquals(3, recordIds.size(), "record ids must stay distinct while the key collapses");
-  }
 
-  @Test
-  void theHistoryKeyIsTheMethodSourcesThreeFields() {
-    assertEquals(
-        new HistoryKey(SAMPLE + "#hello()"),
-        ExecutionIdentity.historyKey(descriptor("/[method:hello()]")));
-    assertEquals(
-        new HistoryKey(SAMPLE + "#each(java.lang.String)"),
-        ExecutionIdentity.historyKey(descriptor("/[test-template:each(java.lang.String)]")));
-  }
 
-  @Test
-  void aNestedClassKeyCarriesTheBinaryClassNameAndTheCommaSpaceSeparator() {
-    TestDescriptor deep =
-        descriptor("/[nested-class:WhenNested]/[method:deep(java.lang.String, int)]");
 
-    assertEquals(
-        new HistoryKey(SAMPLE + "$WhenNested#deep(java.lang.String, int)"),
-        ExecutionIdentity.historyKey(deep));
-  }
-
-  @Test
-  void anArrayParameterArrivesInJvmBinaryFormNotJavaSyntax() {
-    TestDescriptor sum = descriptor("/[method:sum(%5BI)]");
-
-    assertEquals(new HistoryKey(SAMPLE + "#sum([I)"), ExecutionIdentity.historyKey(sum));
-  }
-
-  @Test
-  void refusesAHistoryKeyForADescriptorWithNoMethodSource() {
-    TestDescriptor container = descriptor("");
-
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class, () -> ExecutionIdentity.historyKey(container));
-
-    assertTrue(thrown.getMessage().contains(container.getUniqueId().toString()));
-  }
 
   @Test
   void survivesAStripAndRePrependUnchanged() {

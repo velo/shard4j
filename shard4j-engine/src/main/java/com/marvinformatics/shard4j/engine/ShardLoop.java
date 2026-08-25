@@ -8,7 +8,6 @@ import com.marvinformatics.shard4j.protocol.Outcome;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -166,11 +165,12 @@ final class ShardLoop {
     synchronized (reconciliation) {
       reconciliation.putAll(byUnit);
     }
-    Set<ExecutionId> leased = new HashSet<>();
-    byUnit.keySet().forEach(unit -> leased.add(new ExecutionId(unit)));
+    // Grant order is the coordinator's slowest-first schedule; the nested discovery
+    // receives it intact rather than re-shuffled by a hash-ordered set.
+    List<ExecutionId> leased = byUnit.keySet().stream().map(ShardLoop::classRootedLease).toList();
     TestDescriptor batch =
         jupiter.discoverIds(
-            List.copyOf(leased),
+            leased,
             request.getConfigurationParameters(),
             request.getOutputDirectoryProvider());
     UnitOutcomeListener listener =
@@ -178,9 +178,23 @@ final class ShardLoop {
             request.getEngineExecutionListener(),
             jupiter.nestedRootId(),
             false,
-            leased,
+            Set.copyOf(leased),
             result -> reportCompleted(byUnit, result));
     jupiter.execute(batch, request, listener);
+  }
+
+  /**
+   * The grant-side half of the wire-id contract the census enforces on the way out: a
+   * granted unit the nested discovery could never resolve would be dropped in silence and
+   * fall to reconciliation with a message blaming this engine, so a malformed grant fails
+   * here naming what the coordinator actually sent.
+   */
+  private static ExecutionId classRootedLease(String unitId) {
+    if (!unitId.startsWith("[engine:junit-jupiter]/[class:")) {
+      throw new ShardExecutionException(
+          "Granted a unit this engine could never have registered: " + unitId);
+    }
+    return new ExecutionId(unitId);
   }
 
   private void reportCompleted(Map<String, Grant> byUnit, UnitResult result) {

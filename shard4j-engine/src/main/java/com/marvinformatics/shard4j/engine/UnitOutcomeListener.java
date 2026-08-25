@@ -57,12 +57,6 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     this.onUnitComplete = onUnitComplete;
   }
 
-  Set<String> unitsWithoutOutcome() {
-    Set<String> unexplained = new HashSet<>(leasedUnits);
-    unexplained.removeAll(finalized.keySet());
-    return unexplained;
-  }
-
   @Override
   public void dynamicTestRegistered(TestDescriptor descriptor) {
     downstream.dynamicTestRegistered(descriptor);
