@@ -156,15 +156,36 @@ public final class CoordinatorCore {
       if (!session.isRegistered(request.testId())) {
         throw new UnregisteredTestException(request.testId());
       }
-      Fence current = session.currentFence(request.testId());
-      if (current == null || !current.equals(request.fence())) {
+      Session.Lease lease = session.currentLease(request.testId());
+      if (lease == null || !lease.fence().equals(request.fence())) {
         session.recordStale(request);
         session.touch(now);
         log.warn(
             "Stale result for {} in session {} rejected; the payload is kept aside untouched",
             request.testId(),
             sessionId);
-        throw new StaleFenceException(current);
+        throw new StaleFenceException(lease == null ? null : lease.fence());
+      }
+      // The fence proves the caller holds the lease, so a shard or pass that disagrees with
+      // it is a client bug -- and a mislabelled pass would corrupt the failedIn bookkeeping
+      // that decides which retry pool a failure lands in.
+      if (lease.shard() != request.shard()) {
+        throw new ProtocolViolationException(
+            "Result for "
+                + request.testId()
+                + " reports shard "
+                + request.shard()
+                + " but the lease is held by shard "
+                + lease.shard());
+      }
+      if (lease.pass() != request.pass()) {
+        throw new ProtocolViolationException(
+            "Result for "
+                + request.testId()
+                + " reports pass "
+                + request.pass()
+                + " but the lease was granted for pass "
+                + lease.pass());
       }
       String reason = truncate(request.reason());
       sessionLog.append(
@@ -278,7 +299,19 @@ public final class CoordinatorCore {
               record.testSetHash(),
               record.tests(),
               record.ts()));
-    } else if (record.attempt() > session.attempt()) {
+      return;
+    }
+    // The live path rejects a conflicting census before it is ever appended, so two
+    // REGISTERED records for one session with different hashes mean the log is
+    // contradictory; folding them silently would replay completions into the wrong census.
+    if (!session.testSetHash().equals(record.testSetHash())) {
+      throw new IllegalStateException(
+          "Refusing replay: session "
+              + record.session()
+              + " has REGISTERED records with conflicting testSetHash values; repair the"
+              + " session log before starting");
+    }
+    if (record.attempt() > session.attempt()) {
       session.bumpEpoch(record.attempt(), record.epoch());
       session.touch(record.ts());
     }

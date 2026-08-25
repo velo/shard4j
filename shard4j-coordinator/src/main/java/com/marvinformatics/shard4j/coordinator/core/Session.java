@@ -23,6 +23,11 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 final class Session {
 
+  // A malfunctioning shard can emit NACKs or stale results without bound; the lists are
+  // diagnostic, so beyond the cap only the count survives -- enough to show the flood
+  // happened without letting it eat the heap.
+  private static final int DIAGNOSTIC_CAP = 100;
+
   @Getter private final String id;
   @Getter private final String testSetHash;
   private final Map<String, String> metadata;
@@ -30,6 +35,8 @@ final class Session {
   private final Map<Integer, ShardInfo> shards = new TreeMap<>();
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
+  private int nacksDropped;
+  private int staleResultsDropped;
   @Getter private int attempt;
   @Getter private long epoch;
   @Getter private Instant lastActivity;
@@ -121,8 +128,13 @@ final class Session {
   }
 
   Fence currentFence(String testId) {
+    Lease lease = currentLease(testId);
+    return lease != null ? lease.fence() : null;
+  }
+
+  Lease currentLease(String testId) {
     UnitState unit = units.get(testId);
-    return unit != null && unit.lease != null ? unit.lease.fence() : null;
+    return unit != null ? unit.lease : null;
   }
 
   void releaseLease(String testId) {
@@ -160,12 +172,20 @@ final class Session {
   }
 
   void recordNack(NackRequest.NackedLease lease, Instant now) {
-    nacks.add(lease);
+    if (nacks.size() < DIAGNOSTIC_CAP) {
+      nacks.add(lease);
+    } else {
+      nacksDropped++;
+    }
     touch(now);
   }
 
   void recordStale(ResultRequest request) {
-    staleResults.add(request);
+    if (staleResults.size() < DIAGNOSTIC_CAP) {
+      staleResults.add(request);
+    } else {
+      staleResultsDropped++;
+    }
   }
 
   SessionView view() {
@@ -196,7 +216,9 @@ final class Session {
         shardViews,
         testViews,
         List.copyOf(nacks),
-        List.copyOf(staleResults));
+        List.copyOf(staleResults),
+        nacksDropped,
+        staleResultsDropped);
   }
 
   private static final class UnitState {
@@ -207,7 +229,7 @@ final class Session {
     private final List<SessionView.RecordView> records = new ArrayList<>();
   }
 
-  private record Lease(
+  record Lease(
       int shard, Pass pass, Fence fence, Instant expiresAt, TestState origin, Pass originFailedIn) {}
 
   private static final class ShardInfo {

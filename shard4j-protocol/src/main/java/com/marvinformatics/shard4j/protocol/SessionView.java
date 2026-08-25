@@ -9,6 +9,10 @@ import java.util.Map;
  *
  * <p>It returns ids, states, durations, outcomes, reasons and shard labels. Never source
  * paths, never logs, never stack traces, and never the shared secret.
+ *
+ * <p>{@code nacks} and {@code staleResults} are capped diagnostic channels; the two dropped
+ * counters say how many entries a flood pushed past the cap, so the signal that it happened
+ * survives even when the entries do not.
  */
 public record SessionView(
     String session,
@@ -20,7 +24,9 @@ public record SessionView(
     List<ShardView> shards,
     List<TestView> tests,
     List<NackRequest.NackedLease> nacks,
-    List<ResultRequest> staleResults) {
+    List<ResultRequest> staleResults,
+    int nacksDropped,
+    int staleResultsDropped) {
 
   public record ShardView(int shard, boolean departed, int completed) {}
 

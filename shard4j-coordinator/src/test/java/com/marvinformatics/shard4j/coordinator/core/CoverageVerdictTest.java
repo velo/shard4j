@@ -11,9 +11,10 @@ import org.junit.jupiter.api.Test;
 
 class CoverageVerdictTest {
 
-  private static SessionView view(List<SessionView.TestView> tests, List<SessionView.ShardView> shards) {
+  private static SessionView view(
+      List<SessionView.TestView> tests, List<SessionView.ShardView> shards) {
     return new SessionView(
-        "7f3a", 1, 1, Map.of(), tests.size(), "hash", shards, tests, List.of(), List.of());
+        "7f3a", 1, 1, Map.of(), tests.size(), "hash", shards, tests, List.of(), List.of(), 0, 0);
   }
 
   private static SessionView.TestView test(String id, TestState state) {
@@ -21,7 +22,7 @@ class CoverageVerdictTest {
   }
 
   @Test
-  void allThreeAbsorbingStatesSatisfyCoverage() {
+  void givenAllUnitsInAbsorbingStates_whenJudging_thenSessionPassed() {
     SessionView view =
         view(
             List.of(
@@ -33,7 +34,7 @@ class CoverageVerdictTest {
   }
 
   @Test
-  void aFailedTestFailsTheSession() {
+  void givenAFailedTest_whenJudging_thenSessionFailed() {
     SessionView view =
         view(
             List.of(test("a", TestState.PASSED), test("b", TestState.FAILED)),
@@ -42,13 +43,13 @@ class CoverageVerdictTest {
   }
 
   @Test
-  void anEmptySessionNeverPassesBecauseZeroEqualsZeroWouldGoGreenHavingRunNothing() {
+  void givenEmptySession_whenJudging_thenFailedBecauseZeroEqualsZeroWouldGoGreenHavingRunNothing() {
     SessionView view = view(List.of(), List.of());
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
   }
 
   @Test
-  void everyShardDepartedWithWorkStrandedIsIncompleteNotFailed() {
+  void givenEveryShardDeparted_whenWorkIsStranded_thenIncompleteNotFailed() {
     SessionView view =
         view(
             List.of(test("a", TestState.PASSED), test("b", TestState.PENDING)),
@@ -58,7 +59,7 @@ class CoverageVerdictTest {
   }
 
   @Test
-  void strandedWorkWithALiveShardIsNotYetIncomplete() {
+  void givenStrandedWork_whenAShardIsStillLive_thenNotYetIncomplete() {
     SessionView view =
         view(
             List.of(test("a", TestState.PENDING)),

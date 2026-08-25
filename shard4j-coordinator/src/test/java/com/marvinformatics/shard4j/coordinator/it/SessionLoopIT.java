@@ -89,7 +89,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void everyUnitReachesExactlyOneTerminalStateAndTheVerdictIsCoverage() {
+  void givenAFullSession_whenEveryUnitReachesOneTerminalState_thenVerdictIsCoverage() {
     String sessionId = UUID.randomUUID().toString();
     RegisterResponse first = client.register(sessionId, registration(0, 1));
     RegisterResponse second = client.register(sessionId, registration(1, 1));
@@ -184,7 +184,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void aFailedUnitIsClaimableInTheNextPassAndNeverBefore() {
+  void givenAFailedUnit_whenClaiming_thenClaimableInTheNextPassAndNeverBefore() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
 
@@ -221,7 +221,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void aHigherAttemptBumpsTheEpochAndReHandsFailures() {
+  void givenAHigherAttempt_whenReRegistering_thenEpochBumpsAndFailuresAreReHanded() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
 
@@ -254,7 +254,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void aCensusHashMismatchIsAConflictThatScreams() {
+  void givenARegisteredSession_whenCensusHashDiverges_thenConflictThatScreams() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
 
@@ -268,7 +268,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void malformedCensusesAndResultsAreRejectedWith400() {
+  void givenMalformedCensusesAndResults_whenPosted_thenRejectedWith400() {
     String sessionId = UUID.randomUUID().toString();
     String invocationId = Ids.invocation(Ids.template(BETA, "rows(java.lang.String)"), 1);
     HttpResponse<String> invocationInCensus =
@@ -316,7 +316,7 @@ class SessionLoopIT {
   }
 
   @Test
-  void claimingAnUnregisteredCandidateIsAConflictNeverAnAutoRegistration() {
+  void givenAnUnregisteredCandidate_whenClaiming_thenConflictNeverAnAutoRegistration() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
     HttpResponse<String> response =
@@ -326,8 +326,38 @@ class SessionLoopIT {
     assertThat(response.statusCode()).isEqualTo(409);
   }
 
+  /**
+   * The fence already proves who holds the lease, so a result whose shard or pass disagrees
+   * with it is a client bug -- and a mislabelled pass would file the failure in the wrong
+   * retry pool.
+   */
   @Test
-  void everyShardDepartedWithStrandedWorkReadsAsIncomplete() {
+  void givenALeasedUnit_whenTheResultContradictsTheLease_thenRejectedWith400() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, registration(0, 1));
+    String testId = Ids.method(ALPHA, "first");
+    Fence fence = claimOne(sessionId, 0, testId);
+
+    HttpResponse<String> wrongShard =
+        client.resultRaw(
+            sessionId,
+            new ResultRequest(3, Pass.MAIN, testId, fence, Outcome.PASSED, 10, false, null, null));
+    assertThat(wrongShard.statusCode()).isEqualTo(400);
+
+    HttpResponse<String> wrongPass =
+        client.resultRaw(
+            sessionId,
+            new ResultRequest(
+                0, Pass.RETRY1, testId, fence, Outcome.PASSED, 10, false, null, null));
+    assertThat(wrongPass.statusCode()).isEqualTo(400);
+
+    // Neither rejection consumed the lease: the honest report still lands.
+    client.result(sessionId, passed(0, testId, fence, 10));
+    assertThat(stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
+  }
+
+  @Test
+  void givenStrandedWork_whenEveryShardDeparted_thenVerdictIsIncomplete() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
     String done = Ids.method(ALPHA, "first");
