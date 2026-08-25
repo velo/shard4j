@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.engine;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.List;
+import lombok.experimental.UtilityClass;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.TestSource;
 import org.junit.platform.engine.UniqueId;
@@ -14,26 +15,25 @@ import org.junit.platform.engine.support.descriptor.MethodSource;
  * place either value is constructed: everything downstream -- the wire, the coordinator's
  * store, the duration history -- treats them as opaque strings.
  */
-public final class ExecutionIdentity {
+@UtilityClass
+public class ExecutionIdentity {
 
-  private static final String ENGINE_SEGMENT = "engine";
-  private static final String JUPITER_ENGINE_ID = "junit-jupiter";
-  private static final String INVOCATION_SEGMENT = "test-template-invocation";
-
-  private ExecutionIdentity() {}
+  private final String ENGINE_SEGMENT = "engine";
+  private final String JUPITER_ENGINE_ID = "junit-jupiter";
+  private final String INVOCATION_SEGMENT = "test-template-invocation";
 
   /** The record id: the Jupiter-rooted wire form of the descriptor's unique id. */
-  public static ExecutionId executionId(TestDescriptor descriptor) {
+  public ExecutionId executionId(TestDescriptor descriptor) {
     return executionId(descriptor.getUniqueId());
   }
 
   /** As above, from a unique id that outer engines may have nested under their roots. */
-  public static ExecutionId executionId(UniqueId uniqueId) {
+  public ExecutionId executionId(UniqueId uniqueId) {
     return new ExecutionId(jupiterRooted(uniqueId).toString());
   }
 
   /** The lease unit: the record id with a trailing invocation segment dropped. */
-  public static ExecutionId leaseId(TestDescriptor descriptor) {
+  public ExecutionId leaseId(TestDescriptor descriptor) {
     UniqueId wire = jupiterRooted(descriptor.getUniqueId());
     if (wire.getLastSegment().getType().equals(INVOCATION_SEGMENT)) {
       wire = wire.removeLastSegment();
@@ -46,7 +46,7 @@ public final class ExecutionIdentity {
    * template share the template's source, so they collapse onto its key with no id
    * surgery.
    */
-  public static HistoryKey historyKey(TestDescriptor descriptor) {
+  public HistoryKey historyKey(TestDescriptor descriptor) {
     TestSource source = descriptor.getSource().orElse(null);
     if (!(source instanceof MethodSource method)) {
       throw new IllegalArgumentException(
@@ -62,7 +62,7 @@ public final class ExecutionIdentity {
   }
 
   /** Re-roots a wire-form id under this engine's own root when handing it back to the platform. */
-  public static UniqueId underEngineRoot(UniqueId engineRoot, ExecutionId id) {
+  public UniqueId underEngineRoot(UniqueId engineRoot, ExecutionId id) {
     UniqueId result = engineRoot;
     for (Segment segment : UniqueId.parse(id.value()).getSegments()) {
       result = result.append(segment);
@@ -71,7 +71,7 @@ public final class ExecutionIdentity {
   }
 
   /** Drops the engine segments an outer engine prepends, leaving the Jupiter-rooted form. */
-  private static UniqueId jupiterRooted(UniqueId uniqueId) {
+  private UniqueId jupiterRooted(UniqueId uniqueId) {
     List<Segment> segments = uniqueId.getSegments();
     int root = 0;
     while (root < segments.size()

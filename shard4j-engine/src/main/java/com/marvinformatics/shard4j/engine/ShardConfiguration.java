@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 /**
@@ -28,7 +29,7 @@ public record ShardConfiguration(
     int attempt,
     Map<String, String> metadata,
     Duration retryBudget,
-    java.time.Instant deadline,
+    Instant deadline,
     boolean allLeasedAbortedIsFailure) {
 
   public static ShardConfiguration fromEnvironment() {

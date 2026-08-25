@@ -59,6 +59,12 @@ repository. A holder of the secret plus a live session id can inject results, po
 history and drain a session's queue; they cannot overwrite a recorded result or turn a
 drained session green.
 
+`COORDINATOR_SECRETS` is split on commas so rotation can run two values side by side --
+which means **a secret value must not contain a comma**: it would silently become two
+wrong values, and neither would ever match. Generate secrets from a comma-free alphabet
+(hex or base64url). The coordinator refuses to start when the split produces a blank
+entry, the tell-tale of a stray comma, but it cannot detect a comma inside a value.
+
 v1 is single-tenant per instance -- one instance is one trust domain. **Do not add a
 client-supplied tenant field to get multi-tenancy**: that converts one leaked secret into
 cross-tenant write access. A second tenant gets a second instance.

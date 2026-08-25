@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * The whole configuration surface, bound from environment variables because those are the
@@ -17,7 +18,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     independent deploys with an overlap window. The process must refuse to start when it
  *     is absent or empty, naming the variable. Compared in constant time, never logged,
  *     never echoed -- not in an error body, not at DEBUG, not in a startup banner. Log the
- *     count of accepted values and nothing else.
+ *     count of accepted values and nothing else. The variable is split on commas, so a
+ *     secret value must not contain one -- it would silently become two wrong values; a
+ *     blank entry after the split (the tell-tale of a stray comma) is a refused start.
  * @param tenantKey {@code COORDINATOR_TENANT_KEY}. Opaque: not parsed, not assumed to be
  *     owner/name, not assumed to be Git. The tenant is a property of this instance's
  *     configuration and is never client-supplied; the wire has no tenant field at all.
@@ -35,10 +38,41 @@ public record CoordinatorSettings(
     Set<String> secrets,
     String tenantKey,
     String tenantSlug,
-    Path dataDir,
-    boolean publicRead,
-    Duration leaseTtl,
-    int maxClaimBatch,
-    Duration durationClamp,
-    Duration gcIdle,
-    Duration historyRetention) {}
+    @DefaultValue("/data") Path dataDir,
+    @DefaultValue("false") boolean publicRead,
+    @DefaultValue("20m") Duration leaseTtl,
+    @DefaultValue("8") int maxClaimBatch,
+    @DefaultValue("60m") Duration durationClamp,
+    @DefaultValue("7d") Duration gcIdle,
+    @DefaultValue("30d") Duration historyRetention) {
+
+  private static final String SLUG_PATTERN = "[A-Za-z0-9._-]{1,64}";
+
+  /**
+   * The three required keys are checked here rather than left to fail later: a coordinator
+   * with no accepted secret would accept writes from anyone who found the port, so it must
+   * refuse to start, naming the variable a deployer has to set.
+   */
+  public void requireCompleteness() {
+    if (secrets == null || secrets.isEmpty() || secrets.stream().allMatch(String::isBlank)) {
+      throw new IllegalStateException(
+          "Refusing to start: COORDINATOR_SECRETS is absent or empty."
+              + " The coordinator never runs with authentication disabled;"
+              + " set at least one accepted secret value.");
+    }
+    if (secrets.stream().anyMatch(String::isBlank)) {
+      throw new IllegalStateException(
+          "Refusing to start: COORDINATOR_SECRETS contains a blank entry -- usually a stray"
+              + " comma. The variable is split on commas, so a secret value must not"
+              + " contain one.");
+    }
+    if (tenantKey == null || tenantKey.isBlank()) {
+      throw new IllegalStateException(
+          "Refusing to start: COORDINATOR_TENANT_KEY is required and has no default.");
+    }
+    if (tenantSlug == null || !tenantSlug.matches(SLUG_PATTERN)) {
+      throw new IllegalStateException(
+          "Refusing to start: COORDINATOR_TENANT_SLUG must match " + SLUG_PATTERN + ".");
+    }
+  }
+}
