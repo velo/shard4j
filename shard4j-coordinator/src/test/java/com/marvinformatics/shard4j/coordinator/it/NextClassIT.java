@@ -67,7 +67,7 @@ class NextClassIT {
   @Test
   void givenPartialHistory_whenAskingWhatNext_thenClassesArriveUnknownsFirstThenSlowestFirstUntilNothingRemains() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census()));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census(), null));
 
     // The class holding no-history units beats the class with the biggest measured
     // duration, and inside it the unknowns lead in pinned hash order before its known unit.
@@ -100,8 +100,8 @@ class NextClassIT {
   @Test
   void givenEverythingLeasedElsewhere_whenAskingWhatNext_thenTheAnswerIsEmptyNotAPromise() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census()));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census()));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census(), null));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census(), null));
 
     NextClassResponse everythingMixed = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
     NextClassResponse everythingBig = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));

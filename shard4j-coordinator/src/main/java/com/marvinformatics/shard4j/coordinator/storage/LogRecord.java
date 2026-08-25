@@ -35,6 +35,7 @@ public record LogRecord(
     Long durationMs,
     Boolean firstOnShard,
     String reason,
+    Boolean vanished,
     Instant ts) {
 
   public enum Type {
@@ -123,8 +124,15 @@ public record LogRecord(
         .build();
   }
 
+  /** {@code vanished} marks a NACK whose shard proved the id does not exist any more. */
   public static LogRecord nack(
-      String project, String session, int shard, String testId, String reason, Instant ts) {
+      String project,
+      String session,
+      int shard,
+      String testId,
+      String reason,
+      boolean vanished,
+      Instant ts) {
     return LogRecord.builder()
         .type(Type.NACK)
         .project(project)
@@ -132,6 +140,7 @@ public record LogRecord(
         .shard(shard)
         .testId(testId)
         .reason(reason)
+        .vanished(vanished ? Boolean.TRUE : null)
         .ts(ts)
         .build();
   }

@@ -12,12 +12,12 @@ import lombok.experimental.UtilityClass;
  * coordinator only ever sees the wire form, so here the derivation is the string prefix
  * rule: drop the engine segment, drop a trailing invocation segment, join class and method
  * with {@code #}. Shape A (plain method), shape B (template method) and shape C (template
- * invocation) all collapse to one key per lease unit, which is exactly what the scheduler
- * hands out.
+ * invocation) all collapse to one key per method -- which is exactly what keeps duration
+ * storage at method level even when the scheduler hands out shape-C units.
  *
- * <p>Callers that need the class name take it from the {@link CensusUnit} this returns
- * rather than cutting the id up themselves: one grammar, one error message, one parse per
- * unit per session.
+ * <p>Callers that need the class name, the template flag or the invocation position take
+ * them from the {@link CensusUnit} this returns rather than cutting the id up themselves:
+ * one grammar, one error message, one parse per unit per session.
  */
 @UtilityClass
 public class HistoryKeys {
@@ -26,8 +26,8 @@ public class HistoryKeys {
       Pattern.compile(
           "\\[engine:junit-jupiter\\]"
               + "/\\[class:(?<className>[^\\]]+)\\]"
-              + "/\\[(?:method|test-template):(?<method>[^\\]]+)\\]"
-              + "(?:/\\[test-template-invocation:#\\d+\\])?");
+              + "/\\[(?<kind>method|test-template):(?<method>[^\\]]+)\\]"
+              + "(?:/\\[test-template-invocation:(?<invocation>#\\d+)\\])?");
 
   public CensusUnit parse(String executionId) {
     Matcher matcher = EXECUTION_ID.matcher(executionId);
@@ -39,7 +39,11 @@ public class HistoryKeys {
     }
     String className = matcher.group("className");
     return new CensusUnit(
-        executionId, className, new HistoryKey(className + "#" + matcher.group("method")));
+        executionId,
+        className,
+        new HistoryKey(className + "#" + matcher.group("method")),
+        "test-template".equals(matcher.group("kind")),
+        matcher.group("invocation"));
   }
 
   public HistoryKey of(String executionId) {

@@ -70,7 +70,7 @@ class ForgottenSessionIT {
                 .nackRaw(
                     sessionId,
                     new NackRequest(
-                        0, List.of(new NackRequest.NackedLease(testId, fence, "shutting down"))))
+                        0, List.of(new NackRequest.NackedLease(testId, fence, "shutting down", false))))
                 .status())
         .isEqualTo(404);
     assertThat(

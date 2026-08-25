@@ -51,7 +51,7 @@ class BarrierRestartIT {
       for (int shard = 0; shard <= 2; shard++) {
         client.register(
             sessionId,
-            new RegisterRequest(shard, 1, Map.of(), census));
+            new RegisterRequest(shard, 1, Map.of(), census, null));
       }
       // Shard 2 hits its deadline before claiming anything and goes home.
       client.depart(sessionId, new DepartRequest(2, 1));

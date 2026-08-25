@@ -11,6 +11,7 @@ import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.DepartResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
+import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
@@ -30,9 +31,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
@@ -113,6 +116,7 @@ public final class CoordinatorCore {
                 1,
                 request.metadata(),
                 request.tests(),
+                expandCensus(request.tests()),
                 now);
         sessions.put(sessionId, session);
         log.info(
@@ -141,8 +145,12 @@ public final class CoordinatorCore {
               newEpoch);
         }
       }
+      session.declareFleet(request.shardCount());
       joinLogged(sessionId, session, request.shard(), now);
-      return new RegisterResponse(session.epoch(), session.registeredCount());
+      // The census size, not the expanded unit count: expansion varies with duration
+      // history, and a figure printed every run to be noticed must only move when the
+      // suite itself does.
+      return new RegisterResponse(session.epoch(), session.censusSize());
     }
   }
 
@@ -152,7 +160,7 @@ public final class CoordinatorCore {
       Session session = requireSession(sessionId, now);
       sweepSilentShards(sessionId, session, now);
       for (String candidate : request.candidates()) {
-        if (!session.isRegistered(candidate)) {
+        if (!session.inCensus(candidate)) {
           throw new UnregisteredTestException(candidate);
         }
       }
@@ -164,10 +172,9 @@ public final class CoordinatorCore {
       }
       List<CensusUnit> claimable =
           request.candidates().stream()
-              .filter(candidate -> session.claimableIn(candidate, request.pass()))
-              .map(session::unitOf)
+              .flatMap(candidate -> session.claimableUnitsOf(candidate, request.pass()).stream())
               .toList();
-      List<CensusUnit> ordered = ClaimOrdering.order(claimable, durations::estimate);
+      List<CensusUnit> ordered = orderFor(session, claimable);
       List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
@@ -197,33 +204,126 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<CensusUnit> ordered =
-          ClaimOrdering.order(session.claimable(request.pass()), durations::estimate);
-      if (ordered.isEmpty()) {
-        joinLogged(sessionId, session, request.shard(), now);
-        return new NextClassResponse(null, List.of());
+      List<CensusUnit> ordered = orderFor(session, session.claimable(request.pass()));
+      Set<String> triedClasses = new LinkedHashSet<>();
+      for (CensusUnit top : ordered) {
+        String className = top.className();
+        if (!triedClasses.add(className)) {
+          continue;
+        }
+        List<CensusUnit> inChosenClass =
+            ordered.stream().filter(unit -> className.equals(unit.className())).toList();
+        List<Grant> granted =
+            grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+        if (!granted.isEmpty()) {
+          joinLogged(sessionId, session, request.shard(), now);
+          return new NextClassResponse(className, granted);
+        }
+        // Everything in this class is capped for this shard right now: its share of the
+        // class's invocations is taken and the rest is held for shards still working or
+        // still arriving. The next class in the schedule may still have work for it.
       }
-      String className = ordered.get(0).className();
-      List<CensusUnit> inChosenClass =
-          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
-      List<Grant> granted =
-          grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+      // The empty answer is a commitment: the shard's pull loop stops on it, so it is
+      // remembered -- the fair-share cap must never again hold anything back for a shard
+      // that will not ask.
+      session.markExhausted(request.shard(), request.pass());
       joinLogged(sessionId, session, request.shard(), now);
-      return new NextClassResponse(className, granted);
+      return new NextClassResponse(null, List.of());
     }
   }
 
-  /** Leases the capped prefix of an already-ordered claimable list. */
+  /**
+   * Leases the capped prefix of an already-ordered claimable list. Whole units lease
+   * freely, exactly as before distribution existed; expanded invocation units are
+   * additionally held to the method's fair-share allowance, so one fast asker cannot take
+   * a template whose spreading is the entire point of expanding it.
+   */
   private List<Grant> grantCapped(
       Session session, int shard, Pass pass, List<CensusUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
-    for (CensusUnit unit : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
+    Map<String, Integer> allowanceLeft = new HashMap<>();
+    for (CensusUnit unit : ordered) {
+      if (granted.size() >= maxClaimBatch) {
+        break;
+      }
+      if (unit.invocation() != null) {
+        String censusId = session.censusIdOf(unit.id());
+        int left =
+            allowanceLeft.computeIfAbsent(
+                censusId, id -> session.invocationAllowance(id, shard, pass, now));
+        if (left <= 0) {
+          continue;
+        }
+        allowanceLeft.put(censusId, left - 1);
+      }
       Fence fence = new Fence(session.epoch(), incarnation, ++seq);
       Instant expiresAt = now.plus(leaseTtl);
+      boolean probe = session.isProbe(unit.id());
       session.lease(unit.id(), shard, pass, fence, now, expiresAt);
-      granted.add(new Grant(unit.id(), fence, expiresAt));
+      granted.add(new Grant(unit.id(), fence, expiresAt, probe));
     }
     return granted;
+  }
+
+  /** The scheduler's view of one unit's estimate: per-position for an invocation unit. */
+  private List<CensusUnit> orderFor(Session session, List<CensusUnit> claimable) {
+    return ClaimOrdering.order(claimable, this::estimateOf, unit -> session.isProbe(unit.id()));
+  }
+
+  private OptionalLong estimateOf(CensusUnit unit) {
+    return unit.invocation() == null
+        ? durations.estimate(unit.historyKey())
+        : durations.invocationEstimate(unit.historyKey(), unit.invocation());
+  }
+
+  /**
+   * The census a shard registers is method-level; what the scheduler hands out is this
+   * expansion of it. A template method whose duration history carries a complete
+   * invocation breakdown becomes one claimable unit per recorded position -- handed out
+   * optimistically, reconciled by the shard if a position no longer exists -- plus one
+   * cardinality probe past the last, which is how growth of the parameter set is noticed
+   * at all: JUnit materialises nothing for a nonexistent selection, so only handing out a
+   * position past the plan can prove there is not one. Everything else -- plain methods,
+   * templates never seen or never seen completing -- stays one whole unit, exactly the
+   * unknowns-first fallback the ordering rule already uses, one level down.
+   */
+  private Map<String, List<ClaimableUnit>> expandCensus(List<String> censusIds) {
+    Map<String, List<ClaimableUnit>> expansion = new LinkedHashMap<>();
+    for (String censusId : censusIds) {
+      expansion.put(censusId, expand(censusId));
+    }
+    return expansion;
+  }
+
+  private List<ClaimableUnit> expand(String censusId) {
+    CensusUnit whole = HistoryKeys.parse(censusId);
+    if (!whole.template()) {
+      return List.of(new ClaimableUnit(whole, false));
+    }
+    List<String> plan = durations.invocationPlan(whole.historyKey());
+    if (plan.isEmpty()) {
+      return List.of(new ClaimableUnit(whole, false));
+    }
+    List<ClaimableUnit> expanded = new ArrayList<>();
+    for (String position : plan) {
+      expanded.add(new ClaimableUnit(invocationUnit(censusId, position), false));
+    }
+    int pastThePlan = positionIndexOf(plan.get(plan.size() - 1)) + 1;
+    expanded.add(new ClaimableUnit(invocationUnit(censusId, "#" + pastThePlan), true));
+    log.info(
+        "Expanding {} into {} invocation unit(s) plus a cardinality probe at #{}",
+        censusId,
+        plan.size(),
+        pastThePlan);
+    return expanded;
+  }
+
+  private static CensusUnit invocationUnit(String censusId, String position) {
+    return HistoryKeys.parse(censusId + "/[test-template-invocation:" + position + "]");
+  }
+
+  private static int positionIndexOf(String position) {
+    return Integer.parseInt(position.substring(1));
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {
@@ -302,10 +402,7 @@ public final class CoordinatorCore {
           reason,
           now);
       appendHistory(sessionId, session.epoch(), request, reason, now);
-      if (request.outcome() == Outcome.PASSED) {
-        durations.recordPassed(
-            HistoryKeys.of(request.testId()), sessionId, request.durationMs(), request.firstOnShard());
-      }
+      recordDurations(sessionId, session, request);
       return new ResultResponse(true, null);
     }
   }
@@ -325,7 +422,16 @@ public final class CoordinatorCore {
           session.recordNack(lease, now);
           sessionLog.appendQuietly(
               LogRecord.nack(
-                  tenantKey, sessionId, request.shard(), lease.testId(), truncate(lease.reason()), now));
+                  tenantKey,
+                  sessionId,
+                  request.shard(),
+                  lease.testId(),
+                  truncate(lease.reason()),
+                  lease.vanished(),
+                  now));
+          if (lease.vanished()) {
+            applyVanished(sessionId, session, lease.testId());
+          }
           released.add(lease.testId());
         } else {
           rejected.add(lease.testId());
@@ -450,6 +556,7 @@ public final class CoordinatorCore {
               record.epoch(),
               record.metadata(),
               record.tests(),
+              expandCensus(record.tests()),
               record.ts()));
       return;
     }
@@ -497,9 +604,16 @@ public final class CoordinatorCore {
 
   private void replayNack(LogRecord record) {
     Session session = sessions.get(record.session());
-    if (session != null) {
-      session.recordNack(
-          new NackRequest.NackedLease(record.testId(), null, record.reason()), record.ts());
+    if (session == null) {
+      return;
+    }
+    boolean vanished = Boolean.TRUE.equals(record.vanished());
+    session.recordNack(
+        new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished), record.ts());
+    // Only the census correction is replayed; the duration-store drop lives in the
+    // snapshot. A re-expansion that resurrects the probe merely re-probes and re-vanishes.
+    if (vanished && session.isRegistered(record.testId()) && session.isProbe(record.testId())) {
+      session.removeVanishedProbe(record.testId());
     }
   }
 
@@ -617,9 +731,109 @@ public final class CoordinatorCore {
     }
   }
 
+  /**
+   * What a completed unit teaches the scheduler. A whole unit feeds the method aggregate
+   * as ever, and a PASSED template additionally contributes its per-row breakdown, marked
+   * complete because a passing aggregate enumerated every row it materialised. An
+   * individually-leased invocation contributes its own position -- a skipped row at
+   * duration zero, so a conditionally-skipped position stays in the plan instead of
+   * silently leaving the hand-out -- and the breakdown is marked complete only once every
+   * measured position of the method has absorbed without failing. A probe that passes in
+   * MAIN is real growth: the next position is probed in the same session, so the plan
+   * walks the growth instead of discovering one row per run.
+   */
+  private void recordDurations(String sessionId, Session session, ResultRequest request) {
+    CensusUnit unit = session.unitOf(request.testId());
+    HistoryKey key = unit.historyKey();
+    if (unit.invocation() == null) {
+      if (request.outcome() != Outcome.PASSED) {
+        return;
+      }
+      durations.recordPassed(key, sessionId, request.durationMs(), request.firstOnShard());
+      if (request.invocations() == null || request.invocations().isEmpty()) {
+        return;
+      }
+      boolean everyRowUsable = true;
+      for (InvocationRecord row : request.invocations()) {
+        String position = positionOfRecordId(row.testId());
+        if (position == null) {
+          everyRowUsable = false;
+          continue;
+        }
+        long rowDuration = row.outcome() == Outcome.SKIPPED ? 0 : row.durationMs();
+        durations.recordInvocation(key, sessionId, position, rowDuration);
+      }
+      if (everyRowUsable) {
+        durations.markInvocationsComplete(key, sessionId);
+      }
+      return;
+    }
+    if (request.outcome() != Outcome.PASSED && request.outcome() != Outcome.SKIPPED) {
+      return;
+    }
+    long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
+    durations.recordInvocation(key, sessionId, unit.invocation(), duration);
+    String censusId = session.censusIdOf(request.testId());
+    if (session.measuredUnitsAllNonFailing(censusId)) {
+      durations.markInvocationsComplete(key, sessionId);
+    }
+    if (request.outcome() == Outcome.PASSED
+        && request.pass() == Pass.MAIN
+        && session.isProbe(request.testId())) {
+      int next = positionIndexOf(unit.invocation()) + 1;
+      session.addProbe(censusId, invocationUnit(censusId, "#" + next));
+      log.info(
+          "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
+          sessionId,
+          request.testId(),
+          next);
+    }
+  }
+
+  private static String positionOfRecordId(String recordId) {
+    try {
+      return HistoryKeys.parse(recordId).invocation();
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+  }
+
+  /**
+   * The shard proved this id resolves to nothing in the current commit. For a probe that
+   * is the expected answer: the unit leaves the census, confirming the recorded parameter
+   * count. For a measured invocation it means the parameter set shrank since it was
+   * measured, so the stale position is dropped from history -- the current session stays
+   * loud (the unit stays PENDING and the shard that discovered the drift has already
+   * failed naming it), but the next session expands from the corrected plan.
+   */
+  private void applyVanished(String sessionId, Session session, String testId) {
+    CensusUnit unit = session.unitOf(testId);
+    if (unit.invocation() == null) {
+      return;
+    }
+    if (session.isProbe(testId)) {
+      session.removeVanishedProbe(testId);
+      log.info(
+          "Session {}: cardinality probe {} does not exist; the recorded parameter count"
+              + " stands",
+          sessionId,
+          testId);
+      return;
+    }
+    durations.dropInvocation(unit.historyKey(), unit.invocation());
+    log.warn(
+        "Session {}: invocation {} no longer exists -- the parameter set changed since it"
+            + " was last measured; dropped from duration history",
+        sessionId,
+        testId);
+  }
+
   private static void validateCensus(RegisterRequest request) {
     if (request.attempt() < 1) {
       throw new ProtocolViolationException("attempt must be a positive integer");
+    }
+    if (request.shardCount() != null && request.shardCount() < 1) {
+      throw new ProtocolViolationException("shardCount must be a positive integer when present");
     }
     if (request.tests() == null || request.tests().isEmpty()) {
       throw new ProtocolViolationException(

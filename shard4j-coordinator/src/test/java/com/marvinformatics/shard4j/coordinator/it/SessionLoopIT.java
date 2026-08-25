@@ -56,20 +56,31 @@ class SessionLoopIT {
   private static final String GAMMA = "com.example.orders.GammaIT";
 
   private static List<String> census() {
+    return census("rows");
+  }
+
+  // The container's duration store is shared across these tests, and a template a prior
+  // test completed acquires an invocation plan -- so any test that pins whole-template
+  // semantics registers its own template method, keeping its history virgin.
+  private static List<String> census(String rowsMethod) {
     return List.of(
         Ids.method(ALPHA, "first"),
         Ids.method(ALPHA, "second"),
-        Ids.template(BETA, "rows(java.lang.String)"),
+        Ids.template(BETA, rowsMethod + "(java.lang.String)"),
         Ids.method(GAMMA, "disabledUpstream"),
         Ids.method(GAMMA, "needsLocalService"));
   }
 
   private static RegisterRequest registration(int shard, int attempt) {
+    return registration(shard, attempt, "rows");
+  }
+
+  private static RegisterRequest registration(int shard, int attempt, String rowsMethod) {
     return new RegisterRequest(
         shard,
         attempt,
         Map.of("ci", "example-ci", "run", "42"),
-        census());
+        census(rowsMethod), null);
   }
 
   private static ResultRequest passed(int shard, String testId, Fence fence, long durationMs) {
@@ -80,8 +91,8 @@ class SessionLoopIT {
   @Test
   void givenAFullSession_whenEveryUnitReachesOneTerminalState_thenVerdictIsCoverage() {
     String sessionId = UUID.randomUUID().toString();
-    RegisterResponse first = client.register(sessionId, registration(0, 1));
-    RegisterResponse second = client.register(sessionId, registration(1, 1));
+    RegisterResponse first = client.register(sessionId, registration(0, 1, "rowsWholeVerdict"));
+    RegisterResponse second = client.register(sessionId, registration(1, 1, "rowsWholeVerdict"));
     assertThat(first.epoch()).isOne();
     assertThat(second.epoch()).isOne();
     assertThat(second.registeredCount()).isEqualTo(5);
@@ -105,7 +116,7 @@ class SessionLoopIT {
       client.result(sessionId, passed(0, grant.testId(), grant.fence(), 1_500));
     }
 
-    String templateId = Ids.template(BETA, "rows(java.lang.String)");
+    String templateId = Ids.template(BETA, "rowsWholeVerdict(java.lang.String)");
     Fence templateFence = client.claimOne(sessionId, 1, templateId);
     client.result(
         sessionId,
@@ -250,7 +261,7 @@ class SessionLoopIT {
     String neverRegistered = Ids.method(ALPHA, "phantom");
     List<String> divergent = List.of(Ids.method(ALPHA, "first"), neverRegistered);
     CoordinatorClient.RawResponse response =
-        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent));
+        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent, null));
     assertThat(response.status()).isEqualTo(409);
     assertThat(response.body())
         .contains(neverRegistered)
@@ -269,13 +280,13 @@ class SessionLoopIT {
         client.registerRaw(
             sessionId,
             new RegisterRequest(
-                0, 1, Map.of(), List.of(invocationId)));
+                0, 1, Map.of(), List.of(invocationId), null));
     assertThat(invocationInCensus.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse emptyCensus =
         client.registerRaw(
             sessionId,
-            new RegisterRequest(0, 1, Map.of(), List.of()));
+            new RegisterRequest(0, 1, Map.of(), List.of(), null));
     assertThat(emptyCensus.status()).isEqualTo(400);
 
     client.register(sessionId, registration(0, 1));
@@ -318,8 +329,8 @@ class SessionLoopIT {
   @Test
   void givenASkippedRowUnderAPassingTemplate_whenReported_thenAcceptedAsPassed() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, registration(0, 1));
-    String templateId = Ids.template(BETA, "rows(java.lang.String)");
+    client.register(sessionId, registration(0, 1, "rowsSkippedRow"));
+    String templateId = Ids.template(BETA, "rowsSkippedRow(java.lang.String)");
     Fence fence = client.claimOne(sessionId, 0, templateId);
 
     client.result(

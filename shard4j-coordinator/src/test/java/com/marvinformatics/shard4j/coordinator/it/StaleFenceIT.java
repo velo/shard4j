@@ -57,9 +57,9 @@ class StaleFenceIT {
     String bystander = Ids.method(CLASS_NAME, "bystander");
     List<String> census = List.of(contested, bystander);
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), census));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
     client.register(
-        sessionId, new RegisterRequest(1, 1, Map.of(), census));
+        sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
 
     Fence zombieFence = client.claimOne(sessionId, 0, contested);
     NackResponse nack =
@@ -67,7 +67,7 @@ class StaleFenceIT {
             sessionId,
             new NackRequest(
                 0,
-                List.of(new NackRequest.NackedLease(contested, zombieFence, "job cancelled"))));
+                List.of(new NackRequest.NackedLease(contested, zombieFence, "job cancelled", false))));
     assertThat(nack.released()).containsExactly(contested);
 
     Fence holderFence = client.claimOne(sessionId, 1, contested);
@@ -97,7 +97,7 @@ class StaleFenceIT {
         client.nack(
             sessionId,
             new NackRequest(
-                0, List.of(new NackRequest.NackedLease(contested, zombieFence, "late teardown"))));
+                0, List.of(new NackRequest.NackedLease(contested, zombieFence, "late teardown", false))));
     assertThat(staleNack.released()).isEmpty();
     assertThat(staleNack.rejected()).containsExactly(contested);
 

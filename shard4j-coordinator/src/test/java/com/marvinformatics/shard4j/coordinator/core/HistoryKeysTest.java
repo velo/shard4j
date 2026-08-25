@@ -37,6 +37,27 @@ class HistoryKeysTest {
   }
 
   @Test
+  void parseSeparatesTemplateShapeAndInvocationPosition() {
+    String template =
+        "[engine:junit-jupiter]/[class:com.example.orders.PingResourceIT]"
+            + "/[test-template:each(java.lang.String)]";
+    CensusUnit plain =
+        HistoryKeys.parse(
+            "[engine:junit-jupiter]/[class:com.example.orders.PingResourceIT]/[method:hello()]");
+    assertThat(plain.template()).isFalse();
+    assertThat(plain.invocation()).isNull();
+
+    CensusUnit whole = HistoryKeys.parse(template);
+    assertThat(whole.template()).isTrue();
+    assertThat(whole.invocation()).isNull();
+
+    CensusUnit invocation = HistoryKeys.parse(template + "/[test-template-invocation:#3]");
+    assertThat(invocation.template()).isTrue();
+    assertThat(invocation.invocation()).isEqualTo("#3");
+    assertThat(invocation.historyKey()).isEqualTo(whole.historyKey());
+  }
+
+  @Test
   void anyOtherShapeFailsLoudlyNamingTheId() {
     assertThatThrownBy(() -> HistoryKeys.of("[engine:junit-jupiter]/[class:com.example.A]"))
         .isInstanceOf(IllegalArgumentException.class)

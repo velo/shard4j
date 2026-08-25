@@ -22,7 +22,10 @@ class ClaimOrderingTest {
 
   private static List<String> orderedIds(
       List<CensusUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
-    return ClaimOrdering.order(candidates, estimates).stream().map(CensusUnit::id).toList();
+    return ClaimOrdering.order(candidates, unit -> estimates.apply(unit.historyKey()), unit -> false)
+        .stream()
+        .map(CensusUnit::id)
+        .toList();
   }
 
   @Test
@@ -64,6 +67,24 @@ class ClaimOrderingTest {
                 key.value().contains("mystery") ? OptionalLong.empty() : OptionalLong.of(50_000L));
     assertThat(ordered.get(0)).isEqualTo(id("mystery"));
     assertThat(ordered).hasSize(3);
+  }
+
+  @Test
+  void probesComeLastEvenBehindKnownsAndOtherUnknowns() {
+    String template =
+        "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
+            + "/[test-template:rows(java.lang.String)]";
+    CensusUnit measured = HistoryKeys.parse(template + "/[test-template-invocation:#1]");
+    CensusUnit probe = HistoryKeys.parse(template + "/[test-template-invocation:#2]");
+    List<CensusUnit> ordered =
+        ClaimOrdering.order(
+            List.of(probe, measured, unit("mystery"), unit("known")),
+            unit ->
+                unit.historyKey().value().contains("mystery")
+                    ? OptionalLong.empty()
+                    : OptionalLong.of(10_000L),
+            unit -> unit == probe);
+    assertThat(ordered).containsExactly(unit("mystery"), unit("known"), measured, probe);
   }
 
   @Test
