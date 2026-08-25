@@ -53,12 +53,6 @@ final class Session {
   private static final Duration PRESUMED_DEAD_AFTER =
       Duration.ofSeconds(3L * RETRY_AFTER_SECONDS);
 
-  // How long after session creation a declared-but-unseen shard still reserves its fair
-  // share of a template's invocations. Bounded so a shard that never boots costs at most
-  // this much held-back spreading, not a stranded pass: once the window closes, whoever
-  // is still asking takes the remainder.
-  private static final Duration FLEET_ARRIVAL_WINDOW = Duration.ofSeconds(60);
-
   @Getter private final String id;
   private final Map<String, String> metadata;
   private final Set<String> registered = new LinkedHashSet<>();
@@ -68,9 +62,9 @@ final class Session {
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
   private final Instant createdAt;
+  private final FairShare fairShare;
   private int nacksDropped;
   private int staleResultsDropped;
-  private int declaredShardCount;
   @Getter private int attempt;
   @Getter private long epoch;
   @Getter private Instant lastActivity;
@@ -99,6 +93,7 @@ final class Session {
           unitsByCensusId.put(censusId, unitIds);
         });
     this.createdAt = now;
+    this.fairShare = new FairShare(shards, now);
     this.lastActivity = now;
   }
 
@@ -129,11 +124,9 @@ final class Session {
     return units.containsKey(unitId);
   }
 
-  /** The consumer-declared fleet size, kept as the maximum any registration reported. */
+  /** The consumer-declared fleet size; the fair-share policy is its only reader. */
   void declareFleet(Integer shardCount) {
-    if (shardCount != null && shardCount > declaredShardCount) {
-      declaredShardCount = shardCount;
-    }
+    fairShare.declareFleet(shardCount);
   }
 
   void join(int shard, Instant now) {
@@ -183,11 +176,11 @@ final class Session {
       info.explicitlyDeparted = false;
       info.completedPass = null;
       info.released = false;
-      info.exhaustedIn = null;
     }
+    fairShare.epochBumped();
   }
 
-  private static boolean claimableIn(UnitState unit, Pass pass) {
+  static boolean claimableIn(UnitState unit, Pass pass) {
     return switch (pass) {
       case MAIN -> unit.state == TestState.PENDING;
       case RETRY1 -> unit.state == TestState.FAILED && unit.failedIn == Pass.MAIN;
@@ -253,78 +246,14 @@ final class Session {
 
   /** The open ask came back empty for this shard: it will not ask again in this pass. */
   void markExhausted(int shard, Pass pass) {
-    shards.computeIfAbsent(shard, index -> new ShardInfo()).exhaustedIn = pass;
+    fairShare.markExhausted(shard, pass);
   }
 
-  /**
-   * How many more of the method's invocations this shard may lease right now. The cap is
-   * a fair share -- ceil of the pass's eligible invocations over the expected fleet --
-   * and it only binds while some other shard may still ask: another live shard is still
-   * working the pass, or a declared shard has not arrived and the arrival window is open.
-   * The last shard still asking is never capped, which is what makes the hold-back safe:
-   * spreading degrades to today's behaviour rather than stranding a unit.
-   */
+  /** How many more of the method's invocations this shard may lease: {@link FairShare}. */
   int invocationAllowance(String censusId, int shard, Pass pass, Instant now) {
-    if (!othersMayStillClaim(shard, pass, now)) {
-      return Integer.MAX_VALUE;
-    }
-    int eligible = 0;
-    int mine = 0;
-    for (String unitId : unitsByCensusId.getOrDefault(censusId, List.of())) {
-      UnitState unit = units.get(unitId);
-      if (unit.state == TestState.LEASED) {
-        eligible++;
-        if (unit.lease.shard() == shard) {
-          mine++;
-        }
-        continue;
-      }
-      if (claimableIn(unit, pass)) {
-        eligible++;
-        continue;
-      }
-      SessionView.RecordView latest =
-          unit.records.isEmpty() ? null : unit.records.get(unit.records.size() - 1);
-      if (latest != null && latest.pass() == pass) {
-        eligible++;
-        if (latest.shard() == shard) {
-          mine++;
-        }
-      }
-    }
-    int share = Math.ceilDiv(eligible, expectedFleet(pass, now));
-    return Math.max(0, share - mine);
-  }
-
-  private int expectedFleet(Pass pass, Instant now) {
-    int active =
-        (int) shards.values().stream().filter(info -> !info.departed && !info.released).count();
-    int fleet = Math.max(1, active);
-    if (pass == Pass.MAIN && withinArrivalWindow(now)) {
-      fleet = Math.max(fleet, declaredShardCount);
-    }
-    return fleet;
-  }
-
-  private boolean othersMayStillClaim(int shard, Pass pass, Instant now) {
-    boolean otherStillWorking =
-        shards.entrySet().stream()
-            .anyMatch(
-                entry ->
-                    entry.getKey() != shard
-                        && !entry.getValue().departed
-                        && !entry.getValue().released
-                        && entry.getValue().exhaustedIn != pass
-                        && (entry.getValue().completedPass == null
-                            || entry.getValue().completedPass.ordinal() < pass.ordinal()));
-    if (otherStillWorking) {
-      return true;
-    }
-    return pass == Pass.MAIN && withinArrivalWindow(now) && declaredShardCount > shards.size();
-  }
-
-  private boolean withinArrivalWindow(Instant now) {
-    return now.isBefore(createdAt.plus(FLEET_ARRIVAL_WINDOW));
+    List<UnitState> unitsOfMethod =
+        unitsByCensusId.getOrDefault(censusId, List.of()).stream().map(units::get).toList();
+    return fairShare.invocationAllowance(unitsOfMethod, shard, pass, now);
   }
 
   Pass completedPassOf(int shard) {
@@ -629,13 +558,13 @@ final class Session {
   }
 
   @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-  private static final class UnitState {
-    private final ClaimableUnit unit;
-    private TestState state = TestState.PENDING;
-    private Pass failedIn;
-    private Lease lease;
-    private String reason;
-    private final List<SessionView.RecordView> records = new ArrayList<>();
+  static final class UnitState {
+    final ClaimableUnit unit;
+    TestState state = TestState.PENDING;
+    Pass failedIn;
+    Lease lease;
+    String reason;
+    final List<SessionView.RecordView> records = new ArrayList<>();
   }
 
   record Lease(
@@ -647,13 +576,12 @@ final class Session {
       TestState origin,
       Pass originFailedIn) {}
 
-  private static final class ShardInfo {
-    private boolean departed;
-    private boolean explicitlyDeparted;
-    private int completed;
-    private Pass completedPass;
-    private boolean released;
-    private Instant lastSeenAt;
-    private Pass exhaustedIn;
+  static final class ShardInfo {
+    boolean departed;
+    boolean explicitlyDeparted;
+    int completed;
+    Pass completedPass;
+    boolean released;
+    Instant lastSeenAt;
   }
 }
