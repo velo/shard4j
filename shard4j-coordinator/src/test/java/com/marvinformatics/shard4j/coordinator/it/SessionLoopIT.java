@@ -69,7 +69,6 @@ class SessionLoopIT {
         shard,
         attempt,
         Map.of("ci", "example-ci", "run", "42"),
-        CoordinatorClient.hashOf(census()),
         census());
   }
 
@@ -244,17 +243,22 @@ class SessionLoopIT {
   }
 
   @Test
-  void givenARegisteredSession_whenCensusHashDiverges_thenConflictThatScreams() {
+  void givenARegisteredSession_whenCensusDiverges_thenConflictNamesTheDifferingIds() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
 
-    List<String> divergent = List.of(Ids.method(ALPHA, "first"));
+    String neverRegistered = Ids.method(ALPHA, "phantom");
+    List<String> divergent = List.of(Ids.method(ALPHA, "first"), neverRegistered);
     CoordinatorClient.RawResponse response =
-        client.registerRaw(
-            sessionId,
-            new RegisterRequest(1, 1, Map.of(), CoordinatorClient.hashOf(divergent), divergent));
+        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent));
     assertThat(response.status()).isEqualTo(409);
-    assertThat(response.body()).contains("hash");
+    assertThat(response.body())
+        .contains(neverRegistered)
+        .contains(Ids.method(ALPHA, "second"))
+        .contains(Ids.template(BETA, "rows(java.lang.String)"))
+        .contains(Ids.method(GAMMA, "disabledUpstream"))
+        .contains(Ids.method(GAMMA, "needsLocalService"))
+        .doesNotContain(Ids.method(ALPHA, "first"));
   }
 
   @Test
@@ -265,13 +269,13 @@ class SessionLoopIT {
         client.registerRaw(
             sessionId,
             new RegisterRequest(
-                0, 1, Map.of(), CoordinatorClient.hashOf(List.of(invocationId)), List.of(invocationId)));
+                0, 1, Map.of(), List.of(invocationId)));
     assertThat(invocationInCensus.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse emptyCensus =
         client.registerRaw(
             sessionId,
-            new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(List.of()), List.of()));
+            new RegisterRequest(0, 1, Map.of(), List.of()));
     assertThat(emptyCensus.status()).isEqualTo(400);
 
     client.register(sessionId, registration(0, 1));

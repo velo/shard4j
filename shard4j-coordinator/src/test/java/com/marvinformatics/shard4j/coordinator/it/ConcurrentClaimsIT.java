@@ -66,7 +66,6 @@ class ConcurrentClaimsIT {
       }
     }
     String sessionId = UUID.randomUUID().toString();
-    String hash = CoordinatorClient.hashOf(census);
 
     Queue<String> allGrantedIds = new ConcurrentLinkedQueue<>();
     CountDownLatch startingGun = new CountDownLatch(1);
@@ -79,7 +78,7 @@ class ConcurrentClaimsIT {
               () -> {
                 CoordinatorClient client = new CoordinatorClient(coordinator);
                 client.register(
-                    sessionId, new RegisterRequest(shardIndex, 1, Map.of(), hash, census));
+                    sessionId, new RegisterRequest(shardIndex, 1, Map.of(), census));
                 startingGun.await();
                 boolean anyGrantedInSweep = true;
                 while (anyGrantedInSweep) {
