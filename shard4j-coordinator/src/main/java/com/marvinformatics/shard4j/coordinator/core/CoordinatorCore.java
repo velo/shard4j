@@ -627,13 +627,19 @@ public final class CoordinatorCore {
               + " net that keeps admitted non-passes honest");
     }
     if (request.outcome() == Outcome.PASSED && request.invocations() != null) {
+      // SKIPPED rows are the one admissible mix: a per-invocation disabling condition
+      // skipping a row of an otherwise-passing template still means the unit ran and
+      // passed everything it ran. FAILED or ABORTED rows contradict the aggregate.
       boolean inconsistent =
           request.invocations().stream()
-              .anyMatch(invocation -> invocation.outcome() != Outcome.PASSED);
+              .anyMatch(
+                  invocation ->
+                      invocation.outcome() == Outcome.FAILED
+                          || invocation.outcome() == Outcome.ABORTED);
       if (inconsistent) {
         throw new ProtocolViolationException(
-            "A PASSED unit cannot carry a non-PASSED invocation; the aggregate must be"
-                + " consistent with what it aggregates");
+            "A PASSED unit cannot carry a FAILED or ABORTED invocation; the aggregate must"
+                + " be consistent with what it aggregates");
       }
     }
   }

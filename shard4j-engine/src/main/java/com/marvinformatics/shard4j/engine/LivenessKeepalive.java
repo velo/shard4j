@@ -22,14 +22,18 @@ final class LivenessKeepalive {
     this.thread = thread;
   }
 
-  static LivenessKeepalive start(CoordinatorGateway gateway) {
+  static LivenessKeepalive start(Runnable ping) {
+    return start(ping, INTERVAL);
+  }
+
+  static LivenessKeepalive start(Runnable ping, Duration interval) {
     Thread thread =
         new Thread(
             () -> {
               while (!Thread.currentThread().isInterrupted()) {
                 try {
-                  Thread.sleep(INTERVAL.toMillis());
-                  gateway.keepalive();
+                  Thread.sleep(interval.toMillis());
+                  ping.run();
                 } catch (InterruptedException e) {
                   return;
                 } catch (RuntimeException e) {
@@ -49,7 +53,19 @@ final class LivenessKeepalive {
     return new LivenessKeepalive(thread);
   }
 
+  /**
+   * Quiesces, not merely signals: an interrupt cannot reach a ping blocked in a socket
+   * read, and a claim packet that lands after {@code depart()} rejoins the shard into the
+   * quorum -- a claim is proof of life -- undoing an explicit departure that barrier
+   * packets are carefully fenced against reviving. So stop() returns only once the
+   * keepalive thread is dead, which is what lets the caller order it before departing.
+   */
   void stop() {
     thread.interrupt();
+    try {
+      thread.join();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 }

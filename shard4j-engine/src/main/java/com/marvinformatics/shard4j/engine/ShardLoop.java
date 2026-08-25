@@ -55,7 +55,7 @@ final class ShardLoop {
 
   void run(DiscoveredCensus census) {
     gateway.register();
-    LivenessKeepalive keepalive = LivenessKeepalive.start(gateway);
+    LivenessKeepalive keepalive = LivenessKeepalive.start(gateway::keepalive);
     Thread abandonOnKill =
         new Thread(
             () -> abandonOutstanding("the shard JVM was terminated mid-pass"),
@@ -65,7 +65,7 @@ final class ShardLoop {
       claimAndRunUntilDrained(census);
       reconcileOrFail();
       failOnMassAbort();
-      holdAtBarrier();
+      holdAtBarrier(keepalive);
     } catch (RuntimeException | Error e) {
       // An abnormal exit must never abandon leases to the TTL: healthy shards would sit
       // at the barrier waiting out earliest_lease_expiry, converting one shard's failure
@@ -246,7 +246,7 @@ final class ShardLoop {
    * shard's exit code, decides the run -- and RUN hands control back so the next failsafe
    * execution block can claim from the retry pool.
    */
-  private void holdAtBarrier() {
+  private void holdAtBarrier(LivenessKeepalive keepalive) {
     while (true) {
       BarrierResponse response = gateway.barrier(configuration.pass());
       switch (response.action()) {
@@ -261,6 +261,10 @@ final class ShardLoop {
                 "Shard "
                     + configuration.shardIndex()
                     + " cannot outwait the barrier within its own deadline; departing");
+            // Quiesced first, not merely signalled: a keepalive claim landing after the
+            // departure is proof of life and would rejoin this shard into the quorum,
+            // reviving an explicit departure for up to a sweep interval.
+            keepalive.stop();
             gateway.depart();
             return;
           }

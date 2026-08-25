@@ -309,6 +309,42 @@ class SessionLoopIT {
     assertThat(client.stateOf(sessionId, skipped)).isEqualTo(TestState.SKIPPED);
   }
 
+  /**
+   * The one admissible mixed aggregate: a per-invocation disabling condition skipping a
+   * row of an otherwise-passing template still means the unit ran and passed everything
+   * it ran. Rejecting it would 400 a healthy shard mid-listener and strand its other
+   * leases; FAILED and ABORTED rows under PASSED stay rejected above.
+   */
+  @Test
+  void givenASkippedRowUnderAPassingTemplate_whenReported_thenAcceptedAsPassed() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, registration(0, 1));
+    String templateId = Ids.template(BETA, "rows(java.lang.String)");
+    Fence fence = client.claimOne(sessionId, 0, templateId);
+
+    client.result(
+        sessionId,
+        new ResultRequest(
+            0,
+            Pass.MAIN,
+            templateId,
+            fence,
+            Outcome.PASSED,
+            7_000,
+            false,
+            null,
+            List.of(
+                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null),
+                new InvocationRecord(
+                    Ids.invocation(templateId, 2),
+                    Outcome.SKIPPED,
+                    0,
+                    "row disabled in this environment"),
+                new InvocationRecord(Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null))));
+
+    assertThat(client.stateOf(sessionId, templateId)).isEqualTo(TestState.PASSED);
+  }
+
   @Test
   void givenAnUnregisteredCandidate_whenClaiming_thenConflictNeverAnAutoRegistration() {
     String sessionId = UUID.randomUUID().toString();

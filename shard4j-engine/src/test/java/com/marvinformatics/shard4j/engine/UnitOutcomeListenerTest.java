@@ -24,6 +24,7 @@ class UnitOutcomeListenerTest {
   private static final String PLAIN = PlainShapesFixture.class.getName();
   private static final String SETUP = AbortedSetupFixture.class.getName();
   private static final String ROWS = RowsFixture.class.getName();
+  private static final String SKIPPED_ROW = SkippedRowFixture.class.getName();
 
   private static String method(String className, String method) {
     return "[engine:junit-jupiter]/[class:" + className + "]/[method:" + method + "]";
@@ -99,6 +100,27 @@ class UnitOutcomeListenerTest {
     assertThat(result.invocations().get(1).testId())
         .isEqualTo(unit + "/[test-template-invocation:#2]");
     assertThat(result.invocations().get(1).reason()).contains("row rejected: broken");
+  }
+
+  /**
+   * The one admissible mixed aggregate: a per-invocation disabling condition skips a row
+   * of an otherwise-passing template. The unit ran and passed everything it ran, so the
+   * aggregate stays PASSED -- and the coordinator accepts SKIPPED rows under it, which
+   * SessionLoopIT pins from the other side of the wire.
+   */
+  @Test
+  void givenASkippedRow_whenATemplateUnitCompletes_thenTheAggregateStaysPassed() {
+    String unit =
+        "[engine:junit-jupiter]/[class:" + SKIPPED_ROW + "]/[test-template:rows(java.lang.String)]";
+    Map<String, UnitResult> results = execute(unit);
+
+    UnitResult result = results.get(unit);
+    assertThat(result.outcome()).isEqualTo(Outcome.PASSED);
+    assertThat(result.invocations()).hasSize(3);
+    assertThat(result.invocations())
+        .extracting(InvocationRecord::outcome)
+        .containsExactly(Outcome.PASSED, Outcome.SKIPPED, Outcome.PASSED);
+    assertThat(result.invocations().get(1).reason()).contains("beta is off");
   }
 
   @Test
