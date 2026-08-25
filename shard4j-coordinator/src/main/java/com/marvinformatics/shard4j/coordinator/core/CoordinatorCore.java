@@ -13,7 +13,6 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.DepartResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Grant;
-import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
@@ -32,11 +31,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
 import java.util.Set;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
@@ -61,7 +58,7 @@ public final class CoordinatorCore {
   private final Map<String, Session> sessions = new HashMap<>();
   private final SessionLog sessionLog;
   private final HistoryLog historyLog;
-  private final DurationStore durations;
+  private final InvocationDistribution distribution;
   private final Clock clock;
   private final String tenantKey;
   private final long incarnation;
@@ -86,7 +83,7 @@ public final class CoordinatorCore {
       Duration gcIdle) {
     this.sessionLog = sessionLog;
     this.historyLog = historyLog;
-    this.durations = durations;
+    this.distribution = new InvocationDistribution(durations);
     this.clock = clock;
     this.tenantKey = tenantKey;
     this.incarnation = incarnation;
@@ -116,7 +113,7 @@ public final class CoordinatorCore {
                 request.attempt(),
                 1,
                 request.metadata(),
-                expandCensus(request.tests()),
+                distribution.expandCensus(request.tests()),
                 now);
         sessions.put(sessionId, session);
         log.info(
@@ -264,56 +261,7 @@ public final class CoordinatorCore {
   }
 
   private List<ClaimableUnit> orderFor(List<ClaimableUnit> claimable) {
-    return ClaimOrdering.order(claimable, this::estimateOf);
-  }
-
-  /** The scheduler's view of one unit's estimate: per-position for an invocation unit. */
-  private OptionalLong estimateOf(ClaimableUnit unit) {
-    return unit.invocation() == null
-        ? durations.estimate(unit.historyKey())
-        : durations.invocationEstimate(unit.historyKey(), unit.invocation());
-  }
-
-  /**
-   * The census a shard registers is method-level; what the scheduler hands out is this
-   * expansion of it. A template method whose duration history carries a complete
-   * invocation breakdown becomes one claimable unit per recorded position -- handed out
-   * optimistically, reconciled by the shard if a position no longer exists -- plus one
-   * cardinality probe past the last, which is how growth of the parameter set is noticed
-   * at all: JUnit materialises nothing for a nonexistent selection, so only handing out a
-   * position past the plan can prove there is not one. Everything else -- plain methods,
-   * templates never seen or never seen completing -- stays one whole unit, exactly the
-   * unknowns-first fallback the ordering rule already uses, one level down.
-   */
-  private Map<String, List<ClaimableUnit>> expandCensus(List<String> censusIds) {
-    Map<String, List<ClaimableUnit>> expansion = new LinkedHashMap<>();
-    for (String censusId : censusIds) {
-      expansion.put(censusId, expand(censusId));
-    }
-    return expansion;
-  }
-
-  private List<ClaimableUnit> expand(String censusId) {
-    CensusUnit whole = CensusUnit.parse(censusId);
-    if (!whole.template()) {
-      return List.of(new ClaimableUnit(censusId, whole, false));
-    }
-    List<Integer> plan = durations.invocationPlan(whole.historyKey());
-    if (plan.isEmpty()) {
-      return List.of(new ClaimableUnit(censusId, whole, false));
-    }
-    List<ClaimableUnit> expanded = new ArrayList<>();
-    for (int position : plan) {
-      expanded.add(new ClaimableUnit(censusId, whole.atPosition(position), false));
-    }
-    int pastThePlan = plan.get(plan.size() - 1) + 1;
-    expanded.add(new ClaimableUnit(censusId, whole.atPosition(pastThePlan), true));
-    log.info(
-        "Expanding {} into {} invocation unit(s) plus a cardinality probe at #{}",
-        censusId,
-        plan.size(),
-        pastThePlan);
-    return expanded;
+    return ClaimOrdering.order(claimable, distribution::estimateOf);
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {
@@ -392,7 +340,7 @@ public final class CoordinatorCore {
           reason,
           now);
       appendHistory(sessionId, session.epoch(), request, reason, now);
-      recordDurations(sessionId, session, request);
+      distribution.recordDurations(sessionId, session, request);
       return new ResultResponse(true, null);
     }
   }
@@ -420,7 +368,7 @@ public final class CoordinatorCore {
                   lease.vanished(),
                   now));
           if (lease.vanished()) {
-            applyVanished(sessionId, session, lease.testId());
+            distribution.applyVanished(sessionId, session, lease.testId());
           }
           released.add(lease.testId());
         } else {
@@ -545,7 +493,7 @@ public final class CoordinatorCore {
               record.attempt(),
               record.epoch(),
               record.metadata(),
-              expandCensus(record.tests()),
+              distribution.expandCensus(record.tests()),
               record.ts()));
       return;
     }
@@ -720,104 +668,6 @@ public final class CoordinatorCore {
                 now));
       }
     }
-  }
-
-  /**
-   * What a completed unit teaches the scheduler. A whole unit feeds the method aggregate
-   * as ever, and a PASSED template additionally contributes its per-row breakdown, marked
-   * complete because a passing aggregate enumerated every row it materialised. An
-   * individually-leased invocation contributes its own position -- a skipped row at
-   * duration zero, so a conditionally-skipped position stays in the plan instead of
-   * silently leaving the hand-out -- and the breakdown is marked complete only once every
-   * measured position of the method has absorbed without failing. A probe that passes in
-   * MAIN is real growth: the next position is probed in the same session, so the plan
-   * walks the growth instead of discovering one row per run.
-   */
-  private void recordDurations(String sessionId, Session session, ResultRequest request) {
-    ClaimableUnit unit = session.unitOf(request.testId());
-    HistoryKey key = unit.historyKey();
-    if (unit.invocation() == null) {
-      if (request.outcome() != Outcome.PASSED) {
-        return;
-      }
-      durations.recordPassed(key, sessionId, request.durationMs(), request.firstOnShard());
-      if (request.invocations() == null || request.invocations().isEmpty()) {
-        return;
-      }
-      boolean everyRowUsable = true;
-      for (InvocationRecord row : request.invocations()) {
-        Integer position = positionOfRecordId(row.testId());
-        if (position == null) {
-          everyRowUsable = false;
-          continue;
-        }
-        long rowDuration = row.outcome() == Outcome.SKIPPED ? 0 : row.durationMs();
-        durations.recordInvocation(key, sessionId, position, rowDuration);
-      }
-      if (everyRowUsable) {
-        durations.markInvocationsComplete(key, sessionId);
-      }
-      return;
-    }
-    if (request.outcome() != Outcome.PASSED && request.outcome() != Outcome.SKIPPED) {
-      return;
-    }
-    long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
-    durations.recordInvocation(key, sessionId, unit.invocation(), duration);
-    String censusId = unit.censusId();
-    if (session.measuredUnitsAllNonFailing(censusId)) {
-      durations.markInvocationsComplete(key, sessionId);
-    }
-    if (request.outcome() == Outcome.PASSED
-        && request.pass() == Pass.MAIN
-        && unit.probe()) {
-      int next = unit.invocation() + 1;
-      session.addProbe(
-          new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true));
-      log.info(
-          "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
-          sessionId,
-          request.testId(),
-          next);
-    }
-  }
-
-  private static Integer positionOfRecordId(String recordId) {
-    try {
-      return CensusUnit.parse(recordId).invocation();
-    } catch (IllegalArgumentException e) {
-      return null;
-    }
-  }
-
-  /**
-   * The shard proved this id resolves to nothing in the current commit. For a probe that
-   * is the expected answer: the unit leaves the census, confirming the recorded parameter
-   * count. For a measured invocation it means the parameter set shrank since it was
-   * measured, so the stale position is dropped from history -- the current session stays
-   * loud (the unit stays PENDING and the shard that discovered the drift has already
-   * failed naming it), but the next session expands from the corrected plan.
-   */
-  private void applyVanished(String sessionId, Session session, String testId) {
-    ClaimableUnit unit = session.unitOf(testId);
-    if (unit.invocation() == null) {
-      return;
-    }
-    if (unit.probe()) {
-      session.removeVanishedProbe(testId);
-      log.info(
-          "Session {}: cardinality probe {} does not exist; the recorded parameter count"
-              + " stands",
-          sessionId,
-          testId);
-      return;
-    }
-    durations.dropInvocation(unit.historyKey(), unit.invocation());
-    log.warn(
-        "Session {}: invocation {} no longer exists -- the parameter set changed since it"
-            + " was last measured; dropped from duration history",
-        sessionId,
-        testId);
   }
 
   private static void validateCensus(RegisterRequest request) {
