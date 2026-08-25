@@ -11,8 +11,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * The append-only completion log that IS the session state: replayed on boot, so a restart
@@ -21,9 +20,8 @@ import org.slf4j.LoggerFactory;
  * <p>Appends here fail loud -- this file is load-bearing for restart recovery, unlike the
  * duration history whose loss merely degrades balancing.
  */
+@Slf4j
 public final class SessionLog implements AutoCloseable {
-
-  private static final Logger log = LoggerFactory.getLogger(SessionLog.class);
 
   private final Path dir;
   private final DailyJsonl out;

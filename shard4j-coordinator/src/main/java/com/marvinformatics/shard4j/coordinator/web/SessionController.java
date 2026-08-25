@@ -12,6 +12,7 @@ import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.ResultResponse;
 import com.marvinformatics.shard4j.protocol.SessionView;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,13 +24,10 @@ import org.springframework.web.bind.annotation.RestController;
  * is testable against the real state machine rather than against framework plumbing.
  */
 @RestController
+@RequiredArgsConstructor
 public class SessionController {
 
   private final CoordinatorCore core;
-
-  public SessionController(CoordinatorCore core) {
-    this.core = core;
-  }
 
   @PostMapping("/sessions/{sessionId}/register")
   public RegisterResponse register(

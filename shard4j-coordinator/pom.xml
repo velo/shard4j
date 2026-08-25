@@ -20,6 +20,7 @@
          classpath, so it is free to sit on the current LTS. -->
     <maven.compiler.release>${coordinator.compiler.release}</maven.compiler.release>
     <testcontainers.version>1.21.3</testcontainers.version>
+    <lombok.version>1.18.46</lombok.version>
   </properties>
 
   <dependencyManagement>
@@ -43,6 +44,15 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Compile-time only: constructors, builders and loggers. Provided scope keeps
+         it out of the shipped tree. -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <dependency>
@@ -70,6 +80,22 @@
 
   <build>
     <plugins>
+      <!-- JDK 23+ no longer runs classpath annotation processors implicitly, so
+           Lombok must be named here to run at all. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+              <version>${lombok.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>

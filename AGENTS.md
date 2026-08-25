@@ -130,6 +130,10 @@ coordinator must be tested as a real running server in Docker.
 
 ## Conventions
 
+- Lombok (`provided` scope, so it never enters a shipped dependency tree) supplies
+  constructors (`@RequiredArgsConstructor`), builders (`@Builder`) and loggers (`@Slf4j`)
+  where they replace pure boilerplate. A constructor that validates, normalises or derives
+  state stays hand-written.
 - Files end with a newline. No trailing whitespace on blank lines.
 - Comments explain *why*, not what the next line does.
 - Use imports; never a fully-qualified class name in code.

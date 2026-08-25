@@ -10,9 +10,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,7 +21,9 @@ class SessionLogTest {
 
   @Test
   void aCrashTruncatedFinalLineIsSkippedNotFatal() throws IOException {
-    Instant now = Instant.parse("2026-08-24T12:00:00Z");
+    // The day file is named from the real UTC clock inside the log, so the test must use
+    // the same clock or it breaks at every UTC midnight.
+    Instant now = Instant.now();
     try (SessionLog log = new SessionLog(dir)) {
       log.append(
           LogRecord.unitCompletion(
@@ -38,7 +39,7 @@ class SessionLogTest {
               null,
               now));
     }
-    Path file = dir.resolve(LocalDate.ofInstant(now, ZoneOffset.UTC) + ".jsonl");
+    Path file = onlyJsonlFile();
     Files.writeString(file, "{\"type\":\"COMPLETION\",\"session\":\"7f", StandardOpenOption.APPEND);
 
     List<LogRecord> replayed = new SessionLog(dir).replay(Duration.ofDays(7), now);
@@ -56,5 +57,13 @@ class SessionLogTest {
 
     assertThat(new SessionLog(dir).replay(Duration.ofDays(7), now)).isEmpty();
     assertThat(new SessionLog(dir).replay(Duration.ofDays(30), now)).hasSize(1);
+  }
+
+  private Path onlyJsonlFile() throws IOException {
+    try (Stream<Path> files = Files.list(dir)) {
+      List<Path> jsonl = files.filter(f -> f.getFileName().toString().endsWith(".jsonl")).toList();
+      assertThat(jsonl).hasSize(1);
+      return jsonl.get(0);
+    }
   }
 }

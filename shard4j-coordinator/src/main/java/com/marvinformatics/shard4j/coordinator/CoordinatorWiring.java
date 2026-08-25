@@ -8,8 +8,7 @@ import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
 import com.marvinformatics.shard4j.coordinator.web.SecretAuthFilter;
 import java.time.Clock;
 import java.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,10 +19,9 @@ import org.springframework.core.Ordered;
  * directory lock and the fsynced incarnation bump, then snapshot load or cold seed fold,
  * then session-log replay -- all before the web listener can serve a mutating request.
  */
+@Slf4j
 @Configuration
 public class CoordinatorWiring {
-
-  private static final Logger log = LoggerFactory.getLogger(CoordinatorWiring.class);
 
   @Bean(destroyMethod = "close")
   public DataDirectory dataDirectory(CoordinatorSettings settings) {

@@ -17,8 +17,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * The in-memory duration aggregate behind slowest-first ordering.
@@ -34,9 +34,9 @@ import org.slf4j.LoggerFactory;
  * record is indistinguishable from a measured one here, which is what lets real
  * measurements displace a seed with no special-casing.
  */
+@Slf4j
+@RequiredArgsConstructor
 public final class DurationStore {
-
-  private static final Logger log = LoggerFactory.getLogger(DurationStore.class);
 
   static final int SESSION_WINDOW = 5;
 
@@ -45,11 +45,6 @@ public final class DurationStore {
   private final Path snapshotFile;
   private final long clampMs;
   private final Map<String, List<Entry>> byKey = new HashMap<>();
-
-  public DurationStore(Path snapshotFile, long clampMs) {
-    this.snapshotFile = snapshotFile;
-    this.clampMs = clampMs;
-  }
 
   public synchronized void recordPassed(
       HistoryKey key, String session, long durationMs, boolean firstOnShard) {

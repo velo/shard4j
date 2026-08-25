@@ -28,8 +28,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * The single writer. All authoritative state lives in memory behind one lock, and every
@@ -40,9 +40,9 @@ import org.slf4j.LoggerFactory;
  * serialised write path. The scale it serves is a burst of shards at run start and well
  * under one request per second after that.
  */
+@Slf4j
+@RequiredArgsConstructor
 public final class CoordinatorCore {
-
-  private static final Logger log = LoggerFactory.getLogger(CoordinatorCore.class);
 
   private static final String REQUIRED_ID_PREFIX = "[engine:junit-jupiter]/[class:";
   private static final int REASON_LIMIT = 500;
@@ -59,27 +59,6 @@ public final class CoordinatorCore {
   private final int maxClaimBatch;
   private final Duration gcIdle;
   private long seq;
-
-  public CoordinatorCore(
-      SessionLog sessionLog,
-      HistoryLog historyLog,
-      DurationStore durations,
-      Clock clock,
-      String tenantKey,
-      long incarnation,
-      Duration leaseTtl,
-      int maxClaimBatch,
-      Duration gcIdle) {
-    this.sessionLog = sessionLog;
-    this.historyLog = historyLog;
-    this.durations = durations;
-    this.clock = clock;
-    this.tenantKey = tenantKey;
-    this.incarnation = incarnation;
-    this.leaseTtl = leaseTtl;
-    this.maxClaimBatch = maxClaimBatch;
-    this.gcIdle = gcIdle;
-  }
 
   public RegisterResponse register(String sessionId, RegisterRequest request) {
     validateCensus(request);

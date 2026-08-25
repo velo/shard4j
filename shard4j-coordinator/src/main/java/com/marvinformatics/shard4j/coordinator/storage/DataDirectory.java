@@ -10,6 +10,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 
 /**
  * The one writable directory. Exactly one process may own it: single-writer is a
@@ -20,19 +22,13 @@ import java.nio.file.StandardOpenOption;
  * served. Without it a restart would reset the fence sequence and a pre-restart zombie's
  * write would compare valid; it also survives a wall clock stepping backwards.
  */
+@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public final class DataDirectory implements AutoCloseable {
 
   private final FileChannel lockChannel;
   private final FileLock lock;
   private final Path tenantDir;
   private final long incarnation;
-
-  private DataDirectory(FileChannel lockChannel, FileLock lock, Path tenantDir, long incarnation) {
-    this.lockChannel = lockChannel;
-    this.lock = lock;
-    this.tenantDir = tenantDir;
-    this.incarnation = incarnation;
-  }
 
   public static DataDirectory open(Path root, String tenantSlug) {
     try {

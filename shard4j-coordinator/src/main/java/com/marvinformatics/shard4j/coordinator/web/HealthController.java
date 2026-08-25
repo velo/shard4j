@@ -2,6 +2,7 @@ package com.marvinformatics.shard4j.coordinator.web;
 
 import com.marvinformatics.shard4j.coordinator.storage.DataDirectory;
 import java.util.Map;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,13 +14,10 @@ import org.springframework.web.bind.annotation.RestController;
  * during wiring, before the listener serves anything, so a served answer is proof.
  */
 @RestController
+@RequiredArgsConstructor
 public class HealthController {
 
   private final DataDirectory dataDirectory;
-
-  public HealthController(DataDirectory dataDirectory) {
-    this.dataDirectory = dataDirectory;
-  }
 
   @GetMapping("/healthz")
   public ResponseEntity<Map<String, String>> healthz() {

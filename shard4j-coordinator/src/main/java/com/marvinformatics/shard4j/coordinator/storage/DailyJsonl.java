@@ -12,21 +12,19 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 
 /**
  * Append-only day files, fsynced per append. A crash mid-append truncates only the final
  * line and the reader skips it; at well under one write per second the fsync costs nothing
  * measurable and turns "losing data is acceptable" into a clause that never fires.
  */
+@RequiredArgsConstructor
 final class DailyJsonl implements AutoCloseable {
 
   private final Path dir;
   private FileChannel channel;
   private LocalDate openDate;
-
-  DailyJsonl(Path dir) {
-    this.dir = dir;
-  }
 
   synchronized void append(byte[] jsonLine) throws IOException {
     LocalDate today = LocalDate.now(ZoneOffset.UTC);
