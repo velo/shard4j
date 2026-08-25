@@ -181,14 +181,19 @@ confirmed the rule rather than the exception:
 
 ## Dependency updates
 
-Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves them and
-queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the gate
+Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` queues an
+auto-merge on each. Blanket auto-merge is only defensible because `build.yml` is the gate
 -- module boundary, forbiddenapis, the coordinated failsafe profile against a live
 coordinator, and the container smoke test all run before anything merges.
 
 Two settings live in the repository rather than the tree, and the workflow is inert without
-them: "Allow auto-merge" must be on, and `main` must require the `build.yml` checks.
-Without required checks, `--auto` degrades to merging on the spot.
+them: "Allow auto-merge" is on, and `main` requires the three `build.yml` checks. Without
+the required checks, `--auto` degrades to merging on the spot rather than waiting for green.
+
+The workflow posts no approving review. `GITHUB_TOKEN` is refused with "GitHub Actions is
+not permitted to approve pull requests" unless the repository opts in, and `main` requires
+status checks rather than reviews, so an approval step would be ceremony that cannot
+succeed. Add one back only alongside a required-review rule.
 
 `org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
 They are what set the engine's release-17 floor, and a bot must not be the thing that moves

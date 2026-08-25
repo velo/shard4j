@@ -6,8 +6,8 @@ name: Dependabot auto-merge
 # that breaks any of those never reaches this queue.
 #
 # Two repository settings make this work, and neither lives in the tree: "Allow auto-merge"
-# must be on, and main must require the build.yml checks. Without the required checks,
-# `--auto` degrades to merging on the spot.
+# must be on, and main must require the build.yml checks. Both are set. Without the required
+# checks, `--auto` degrades to merging on the spot rather than waiting for green.
 on:
   pull_request:
     branches:
@@ -28,10 +28,11 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Auto-approve
-        uses: hmarr/auto-approve-action@v4
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # No approving review is posted here on purpose. GITHUB_TOKEN is refused with
+      # "GitHub Actions is not permitted to approve pull requests" unless the repository
+      # opts in, and main requires status checks rather than reviews, so the approval
+      # would be ceremony that cannot succeed. Add one back only alongside a required-
+      # review rule, and enable that setting at the same time.
 
       # Squash, to match the single-line history this repository keeps.
       - name: Enable auto-merge
