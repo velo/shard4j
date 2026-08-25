@@ -14,13 +14,12 @@ updates:
       # exist to keep a bot from making that decision -- but they draw the line at
       # different levels, deliberately.
       #
-      # JUnit Platform: patch-only. The engine calls ExecutionRequest.create and
-      # EngineDiscoveryRequest's output-directory accessors, and the Platform changed that
-      # contract binary-incompatibly in three consecutive minors -- 1.12 a 4-arg
-      # create(.., OutputDirectoryProvider); 1.13 a 5-arg create(.., OutputDirectoryProvider,
-      # store); 1.14 a 5-arg create(.., OutputDirectoryCreator, store). A *minor* therefore
-      # moves the floor, which is how 0.2.0 shipped requiring 1.14 without anyone choosing
-      # to (#31). Patches within a minor keep the shape, so those still flow.
+      # JUnit Platform: patch-only. The Platform has changed the API this engine builds on
+      # binary-incompatibly on every recent minor, so a *minor* bump moves the floor for
+      # every consumer -- which is how 0.2.0 shipped requiring 1.14 without anyone choosing
+      # to (#31). Patches within a minor keep the API shape, so those still flow. The
+      # signature history and the consumer-side fix live in one place: "JUnit Platform
+      # version alignment" in README.md.
       - dependency-name: org.junit:junit-bom
         update-types:
           - "version-update:semver-major"

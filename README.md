@@ -87,7 +87,8 @@ output-directory accessors binary-incompatibly in three consecutive minors --
 `OutputDirectoryProvider not available` / `OutputDirectoryCreator not available`
 exception, thrown from a `default` method on the interface whose accessor this engine did
 not override, and it names the cause: *"probably due to unaligned versions of the
-junit-platform-engine and junit-platform-launcher jars on the classpath"*. The Platform
+junit-platform-engine and junit-platform-launcher jars on the classpath/module
+path."*. The Platform
 assumes engine and launcher move together; shard4j is an engine, so it inherits that
 assumption.
 
@@ -104,6 +105,10 @@ than the one shard4j targets, and the framework BOM wins unless told otherwise. 
   <scope>import</scope>
 </dependency>
 ```
+
+Any `5.14.x` works -- only the **minor** has to match, and patch bumps within it keep the
+API shape (which is why dependabot still lets those through). Check `pom.xml` for the
+version this release actually builds against.
 
 Surefire cannot settle this for you. `surefire-junit-platform` is a *plugin*-classpath
 artifact and manages nothing on the test classpath; it also lags -- surefire 3.5.6
