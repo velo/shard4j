@@ -198,6 +198,15 @@ workflow is inert or red without them:
   requests". `github-actions[bot]` approving `dependabot[bot]` is two distinct identities,
   which is what makes it permissible; a token approving its own PR still would not be.
 
+**`github_actions` updates are approved but not queued, and that is not a bug to fix.**
+They edit files under `.github/workflows/`, and GitHub refuses any `GITHUB_TOKEN` merge that
+does -- *"refusing to allow a GitHub App to create or update workflow ... without
+`workflows` permission"*. That scope exists only on a PAT, and this repository does not use
+one; `build.yml` makes the same choice for the GHCR push. Merge those by hand. Reaching for
+a PAT to close the gap would put a long-lived credential with write access to the workflows
+themselves into repository secrets, which buys a little convenience for a lot of blast
+radius.
+
 `org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
 They are what set the engine's release-17 floor, and a bot must not be the thing that moves
 it.
