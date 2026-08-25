@@ -86,15 +86,21 @@ final class Session {
   void join(int shard, Instant now) {
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
     info.departed = false;
+    info.explicitlyDeparted = false;
     info.lastSeenAt = now;
     touch(now);
   }
 
-  boolean depart(int shard) {
+  /** The shard's own goodbye -- unlike a presumed death, a barrier packet cannot undo it. */
+  void depart(int shard) {
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    boolean newlyDeparted = !info.departed;
     info.departed = true;
-    return newlyDeparted;
+    info.explicitlyDeparted = true;
+  }
+
+  boolean hasDeparted(int shard) {
+    ShardInfo info = shards.get(shard);
+    return info != null && info.departed;
   }
 
   /**
@@ -116,6 +122,7 @@ final class Session {
     // attempt's shards re-join with a clean watermark and no early release.
     for (ShardInfo info : shards.values()) {
       info.departed = true;
+      info.explicitlyDeparted = false;
       info.completedPass = null;
       info.released = false;
     }
@@ -135,10 +142,20 @@ final class Session {
     return info == null ? null : info.completedPass;
   }
 
+  /**
+   * Arrival at a barrier is proof of life, so it reverses a presumed death -- and that
+   * revival is load-bearing: were a fleet's leases all to expire at once, the pools would
+   * be resolved against zero live shards and every still-working shard would be released
+   * with units pending. An explicit departure is different: the shard said goodbye, so the
+   * only arrival that can follow is a delayed or duplicated packet, and reviving on that
+   * would resurrect a shard that will never poll again into every future quorum.
+   */
   void completePass(int shard, Pass pass, Instant now) {
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    info.departed = false;
-    info.lastSeenAt = now;
+    if (!info.explicitlyDeparted) {
+      info.departed = false;
+      info.lastSeenAt = now;
+    }
     if (info.completedPass == null || info.completedPass.ordinal() < pass.ordinal()) {
       info.completedPass = pass;
     }
@@ -272,7 +289,9 @@ final class Session {
     List<Integer> newlyDeparted = new ArrayList<>();
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.LEASED && !unit.lease.expiresAt().isAfter(now)) {
-        if (depart(unit.lease.shard())) {
+        ShardInfo info = shards.computeIfAbsent(unit.lease.shard(), index -> new ShardInfo());
+        if (!info.departed) {
+          info.departed = true;
           newlyDeparted.add(unit.lease.shard());
         }
         restore(unit);
@@ -435,6 +454,7 @@ final class Session {
 
   private static final class ShardInfo {
     private boolean departed;
+    private boolean explicitlyDeparted;
     private int completed;
     private Pass completedPass;
     private boolean released;

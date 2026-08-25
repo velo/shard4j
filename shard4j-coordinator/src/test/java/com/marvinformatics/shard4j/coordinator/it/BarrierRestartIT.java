@@ -55,7 +55,7 @@ class BarrierRestartIT {
             new RegisterRequest(shard, 1, Map.of(), CoordinatorClient.hashOf(census), census));
       }
       // Shard 2 hits its deadline before claiming anything and goes home.
-      client.depart(sessionId, new DepartRequest(2));
+      client.depart(sessionId, new DepartRequest(2, 1));
 
       Fence mineFence = client.claimOne(sessionId, 0, mine);
       client.result(
@@ -65,7 +65,7 @@ class BarrierRestartIT {
       client.result(
           sessionId,
           new ResultRequest(0, Pass.MAIN, flaky, flakyFence, Outcome.FAILED, 700, false, null, null));
-      assertThat(client.barrier(sessionId, new BarrierRequest(0, Pass.MAIN)).action())
+      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN)).action())
           .isEqualTo(BarrierResponse.Action.WAIT);
 
       Fence yoursFence = client.claimOne(sessionId, 1, yours);
@@ -73,7 +73,7 @@ class BarrierRestartIT {
           sessionId,
           new ResultRequest(1, Pass.MAIN, yours, yoursFence, Outcome.PASSED, 800, false, null, null));
       // Two waiters for one unit of retry work: shard 1 is released.
-      assertThat(client.barrier(sessionId, new BarrierRequest(1, Pass.MAIN)).action())
+      assertThat(client.barrier(sessionId, new BarrierRequest(1, 1, Pass.MAIN)).action())
           .isEqualTo(BarrierResponse.Action.DONE);
 
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
@@ -94,7 +94,7 @@ class BarrierRestartIT {
 
       // The departure and shard 1's watermark survived: neither the ghost nor the released
       // shard holds the quorum, so the retained waiter is released into the retry pass.
-      assertThat(client.barrier(sessionId, new BarrierRequest(0, Pass.MAIN)).action())
+      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN)).action())
           .isEqualTo(BarrierResponse.Action.RUN);
 
       ClaimResponse retry =

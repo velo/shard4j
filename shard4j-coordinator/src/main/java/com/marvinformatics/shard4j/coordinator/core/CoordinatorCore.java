@@ -294,9 +294,15 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      if (session.depart(request.shard())) {
+      if (request.epoch() != session.epoch()) {
+        throw new StaleEpochException(request.epoch(), session.epoch());
+      }
+      // Durable before memory, like every mutation: a crash between the two must find the
+      // departure on disk, never only in memory.
+      if (!session.hasDeparted(request.shard())) {
         sessionLog.append(LogRecord.departed(tenantKey, sessionId, request.shard(), now));
       }
+      session.depart(request.shard());
       session.touch(now);
       return new DepartResponse(request.shard(), true);
     }
@@ -317,6 +323,9 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
+      if (request.epoch() != session.epoch()) {
+        throw new StaleEpochException(request.epoch(), session.epoch());
+      }
       sweepSilentShards(sessionId, session, now);
       Pass completedSoFar = session.completedPassOf(request.shard());
       if (completedSoFar == null || completedSoFar.ordinal() < request.completedPass().ordinal()) {

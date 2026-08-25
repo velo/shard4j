@@ -69,7 +69,7 @@ class RetryBarrierIT {
   }
 
   private static BarrierResponse arrive(String sessionId, int shard, Pass completedPass) {
-    return client.barrier(sessionId, new BarrierRequest(shard, completedPass));
+    return client.barrier(sessionId, new BarrierRequest(shard, 1, completedPass));
   }
 
   @Test
@@ -148,7 +148,7 @@ class RetryBarrierIT {
     ClaimResponse stragglerRetry =
         client.claim(sessionId, new ClaimRequest(1, Pass.RETRY1, className, census));
     assertThat(stragglerRetry.granted()).isEmpty();
-    client.depart(sessionId, new DepartRequest(1));
+    client.depart(sessionId, new DepartRequest(1, 1));
 
     shard0.join(30_000);
     assertThat(shard0.isAlive()).as("shard 0's engine loop must terminate").isFalse();
@@ -274,7 +274,7 @@ class RetryBarrierIT {
         sessionId,
         new NackRequest(
             1, List.of(new NackRequest.NackedLease(stranded, strandedFence, "job deadline"))));
-    client.depart(sessionId, new DepartRequest(1));
+    client.depart(sessionId, new DepartRequest(1, 1));
 
     // The departed shard no longer holds the barrier; the survivor runs the retry alone.
     assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.RUN);
@@ -288,7 +288,7 @@ class RetryBarrierIT {
     // The NACKed unit is back in the main pool with every live shard past main: it is
     // stranded, must not hold the next barrier, and names the session INCOMPLETE.
     assertThat(arrive(sessionId, 0, Pass.RETRY1).action()).isEqualTo(BarrierResponse.Action.DONE);
-    client.depart(sessionId, new DepartRequest(0));
+    client.depart(sessionId, new DepartRequest(0, 1));
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, stranded)).isEqualTo(TestState.PENDING);
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.INCOMPLETE);
@@ -357,7 +357,7 @@ class RetryBarrierIT {
         sessionId, result(0, Pass.RETRY2, flaky, retry2.granted().get(0).fence(), Outcome.PASSED));
     assertThat(arrive(sessionId, 0, Pass.RETRY2).action()).isEqualTo(BarrierResponse.Action.DONE);
 
-    client.depart(sessionId, new DepartRequest(0));
+    client.depart(sessionId, new DepartRequest(0, 1));
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.PASSED);
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
@@ -413,17 +413,100 @@ class RetryBarrierIT {
         sessionId, result(1, Pass.RETRY1, flaky, retry.granted().get(0).fence(), Outcome.PASSED));
     assertThat(arrive(sessionId, 1, Pass.RETRY1).action()).isEqualTo(BarrierResponse.Action.DONE);
 
-    client.depart(sessionId, new DepartRequest(1));
+    client.depart(sessionId, new DepartRequest(1, 1));
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.PASSED);
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
+  }
+
+  /**
+   * After an epoch bump the previous attempt's shards are known-dead. A zombie of that
+   * attempt still polling must be fenced out exactly as its result writes are: an accepted
+   * barrier arrival mutates the roster, and would resurrect the zombie into the waiter
+   * tally and the quorum of an attempt it is not part of.
+   */
+  @Test
+  void givenAnEpochBump_whenAZombiePollsTheBarrierOrDeparts_thenItIsFencedOutAndStaysDead() {
+    String sessionId = UUID.randomUUID().toString();
+    String className = "com.example.orders.ZombieBarrierIT";
+    String early = Ids.method(className, "early");
+    String late = Ids.method(className, "late");
+    List<String> census = List.of(early, late);
+    client.register(sessionId, registration(0, census));
+    client.register(sessionId, registration(1, census));
+
+    Fence earlyFence = client.claimOne(sessionId, 0, early);
+    client.result(sessionId, result(0, Pass.MAIN, early, earlyFence, Outcome.PASSED));
+    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.WAIT);
+
+    // A registration at a higher attempt: the old shards are known-dead, the epoch moves on.
+    client.register(
+        sessionId, new RegisterRequest(5, 2, Map.of(), CoordinatorClient.hashOf(census), census));
+
+    CoordinatorClient.RawResponse zombiePoll =
+        client.barrierRaw(sessionId, new BarrierRequest(0, 1, Pass.MAIN));
+    assertThat(zombiePoll.status()).isEqualTo(409);
+    CoordinatorClient.RawResponse zombieDepart =
+        client.departRaw(sessionId, new DepartRequest(0, 1));
+    assertThat(zombieDepart.status()).isEqualTo(409);
+
+    SessionView view = client.view(sessionId);
+    assertThat(
+            view.shards().stream().filter(shard -> shard.shard() == 0).findFirst().orElseThrow().departed())
+        .as("the fenced zombie must not be resurrected into the roster")
+        .isTrue();
+    assertThat(
+            view.shards().stream().filter(shard -> shard.shard() == 5).findFirst().orElseThrow().departed())
+        .isFalse();
+  }
+
+  /**
+   * An explicit departure is goodbye: the only barrier packet that can follow it is a
+   * delayed or duplicated one, and accepting its side effects would revive a shard that
+   * will never poll again -- permanently, since nothing departs a shard that holds no
+   * lease and counts in no cadence.
+   */
+  @Test
+  void givenAnExplicitlyDepartedShard_whenADelayedBarrierPostLands_thenItIsNotResurrected() {
+    String sessionId = UUID.randomUUID().toString();
+    String className = "com.example.orders.DelayedPacketIT";
+    String green = Ids.method(className, "green");
+    String flaky = Ids.method(className, "flaky");
+    List<String> census = List.of(green, flaky);
+    client.register(sessionId, registration(0, census));
+    client.register(sessionId, registration(1, census));
+
+    Fence flakyFence = client.claimOne(sessionId, 1, flaky);
+    Fence greenFence = client.claimOne(sessionId, 0, green);
+    client.result(sessionId, result(0, Pass.MAIN, green, greenFence, Outcome.PASSED));
+    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.WAIT);
+    client.depart(sessionId, new DepartRequest(0, 1));
+
+    // The delayed packet: same epoch, landing after the goodbye.
+    arrive(sessionId, 0, Pass.MAIN);
+    assertThat(
+            client.view(sessionId).shards().stream()
+                .filter(shard -> shard.shard() == 0)
+                .findFirst()
+                .orElseThrow()
+                .departed())
+        .isTrue();
+
+    // The straggler must be retained and run its own retry -- were the corpse revived, its
+    // MAIN watermark would count as a waiter and the straggler would be released instead.
+    client.result(sessionId, result(1, Pass.MAIN, flaky, flakyFence, Outcome.FAILED));
+    assertThat(arrive(sessionId, 1, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.RUN);
+    ClaimResponse retry =
+        client.claim(sessionId, new ClaimRequest(1, Pass.RETRY1, className, census));
+    assertThat(retry.granted()).hasSize(1);
+    assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
   }
 
   @Test
   void givenMalformedOrUnknownBarrierCalls_whenPosted_thenRejectedWithoutSideEffects() {
     String unknownSession = UUID.randomUUID().toString();
     CoordinatorClient.RawResponse unknown =
-        client.barrierRaw(unknownSession, new BarrierRequest(0, Pass.MAIN));
+        client.barrierRaw(unknownSession, new BarrierRequest(0, 1, Pass.MAIN));
     assertThat(unknown.status()).isEqualTo(404);
 
     String sessionId = UUID.randomUUID().toString();
@@ -454,7 +537,7 @@ class RetryBarrierIT {
         }
       }
       BarrierResponse response;
-      while ((response = client.barrier(sessionId, new BarrierRequest(shard, pass))).action()
+      while ((response = client.barrier(sessionId, new BarrierRequest(shard, 1, pass))).action()
           == BarrierResponse.Action.WAIT) {
         waitsObserved.incrementAndGet();
         sleep(200);
@@ -463,7 +546,7 @@ class RetryBarrierIT {
         break;
       }
     }
-    client.depart(sessionId, new DepartRequest(shard));
+    client.depart(sessionId, new DepartRequest(shard, 1));
   }
 
   private static Map<String, List<String>> byClass(List<String> census) {

@@ -77,7 +77,7 @@ class BarrierSilentDeathIT {
 
     // While the dead shard's lease is live, the survivor is told how long that can last.
     BarrierResponse waiting =
-        client.barrier(sessionId, new BarrierRequest(0, Pass.MAIN));
+        client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN));
     assertThat(waiting.action()).isEqualTo(BarrierResponse.Action.WAIT);
     assertThat(waiting.earliestLeaseExpiry()).isNotNull();
 
@@ -105,10 +105,10 @@ class BarrierSilentDeathIT {
             null));
 
     // The stranded unit must not hold the next barrier open: nothing can retry it.
-    assertThat(client.barrier(sessionId, new BarrierRequest(0, Pass.RETRY1)).action())
+    assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.RETRY1)).action())
         .isEqualTo(BarrierResponse.Action.DONE);
 
-    client.depart(sessionId, new DepartRequest(0));
+    client.depart(sessionId, new DepartRequest(0, 1));
     SessionView view = client.view(sessionId);
     assertThat(
             view.shards().stream()
@@ -125,7 +125,7 @@ class BarrierSilentDeathIT {
       throws InterruptedException {
     Instant deadline = Instant.now().plusSeconds(15);
     while (true) {
-      BarrierResponse response = client.barrier(sessionId, new BarrierRequest(shard, pass));
+      BarrierResponse response = client.barrier(sessionId, new BarrierRequest(shard, 1, pass));
       if (response.action() != BarrierResponse.Action.WAIT) {
         return response;
       }
