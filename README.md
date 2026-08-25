@@ -84,6 +84,7 @@ system properties) first, then environment variables (`shard.foo.bar` maps to
 | `shard.pass` | yes | `main` \| `retry1` \| `retry2`, one per execution block. |
 | `shard.attempt` | no (`1`) | Monotonic re-run counter; a higher value voids the previous attempt's leases. |
 | `shard.concurrency` | no (`1`) | Drain slots per shard: how many classes run at once in this JVM. Above 1, read the in-shard parallelism contract below. |
+| `shard.count` | no | Total shards this run launched. A balancing hint only -- it lets the coordinator hold back a fair share of a parameterized method's invocations for shards that have not registered yet, instead of granting them all to whichever shard asked first. Never part of any quorum. |
 | `shard.metadata.*` | no | Forwarded verbatim; the only seam CI-vendor vocabulary may pass through. |
 | `shard.coordinator.retry.budget` | no (`5m`) | Transport retry window; must exceed the coordinator deployment's restart time. |
 | `shard.deadline` | no | Absolute job-kill instant (ISO-8601); enables early self-release at the barrier. |
@@ -157,6 +158,48 @@ Orthogonally, Jupiter's own `junit.jupiter.execution.parallel.enabled` passes th
 the nested executions and is tolerated: the engine's outcome accounting is thread-safe
 under concurrent events. It parallelises leaves inside one class-drain, which rarely
 helps a suite dominated by single-leaf classes, and the same shared-state caveats apply.
+
+## Invocation distribution
+
+A `@ParameterizedTest` method leases as one unit on a cold coordinator, because its
+invocations do not exist at discovery time -- a template yields a container and zero
+leaves, so the census cannot enumerate them. But the coordinator records per-invocation
+durations from the first run onward, and once a method's history carries a complete
+breakdown -- every row of a session seen finishing non-failing -- the scheduler hands its
+invocations out individually: `#1` to one shard, `#2` to another, each ranked by its own
+measured duration. A 5 x 55s method stops being one indivisible 275s block. Methods with
+no such history still lease whole -- the same unknowns-first-then-measured shape the
+ordering rule already uses, one level down.
+
+What it costs and how it stays honest:
+
+- **Each participating shard pays its own class setup.** Standard JUnit semantics: every
+  shard running any invocation instantiates the class and runs `@BeforeAll`/`@AfterAll`
+  itself. Spreading is worth it when the rows dwarf the setup, which is exactly the case
+  the durations prove.
+- **Positions are handed out optimistically and reconciled after.** Invocation ids are
+  positional and shift when a `@MethodSource` changes. A handed-out position that no
+  longer exists materialises nothing -- JUnit drops it silently -- so the shard's
+  reconciliation NACKs it naming the cause (the parameter set changed since it was last
+  measured), the run fails loudly, and the coordinator drops the stale position from
+  history so the next run expands from the corrected plan.
+- **Growth is probed, not assumed away.** Every expanded method also hands out one
+  *cardinality probe*: the position just past the recorded plan. Most runs it vanishes
+  quietly, confirming the count; when a fixture grew, the probe runs the new row, gets
+  measured, and the next position is probed in turn -- so a grown parameter set is
+  noticed the run it happens instead of silently never running.
+- **Retry and coverage stay per-position.** Each invocation runs the full unit state
+  machine: a failed row enters the retry pool alone, any shard may pick it up (paying
+  that class setup), and the coverage verdict counts every position individually -- a
+  vanished probe leaves the census, everything else must reach a terminal non-failing
+  state.
+- **History keying stays at method level.** Storage never keys by position; the breakdown
+  is a value inside the method-keyed window entry. Distribution acts on positions, storage
+  never does.
+
+Set `shard.count` so the coordinator can hold a fair share of a method's invocations back
+for shards that have not registered yet; without it, spreading still happens but only
+among the shards that have already asked.
 
 ## Deployment
 
