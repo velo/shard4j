@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,6 +26,15 @@ import lombok.experimental.Accessors;
 /**
  * One live session: the census, the per-unit state machine, the shard roster and the
  * diagnostic side channels. All mutation happens under the coordinator's single write lock.
+ *
+ * <p>The census lives here at two granularities on purpose. What a shard registers -- and
+ * what registration equality is judged over -- is the method-level enumeration, because
+ * invocations do not exist at the shard's discovery time. What the scheduler hands out is
+ * the expanded unit set: a template method with a trusted invocation plan becomes one
+ * claimable unit per recorded position (plus one cardinality probe past the last), and
+ * everything else stays a single whole unit. Each expanded unit runs the full per-unit
+ * state machine independently, so a failed invocation retries alone and the coverage
+ * verdict counts every position individually.
  */
 @Accessors(fluent = true)
 final class Session {
@@ -45,45 +55,78 @@ final class Session {
 
   @Getter private final String id;
   private final Map<String, String> metadata;
+  private final Set<String> registered = new LinkedHashSet<>();
+  private final Map<String, List<String>> unitsByCensusId = new LinkedHashMap<>();
   private final Map<String, UnitState> units = new LinkedHashMap<>();
   private final Map<Integer, ShardInfo> shards = new TreeMap<>();
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
+  private final Instant createdAt;
+  private final FairShare fairShare;
   private int nacksDropped;
   private int staleResultsDropped;
   @Getter private int attempt;
   @Getter private long epoch;
   @Getter private Instant lastActivity;
 
+  /** {@code expansion} carries the census order and content in one structure: each
+   * method-level census id, in registration order, to its expanded claimable units. */
   Session(
       String id,
       int attempt,
       long epoch,
       Map<String, String> metadata,
-      List<String> tests,
+      Map<String, List<ClaimableUnit>> expansion,
       Instant now) {
     this.id = id;
     this.attempt = attempt;
     this.epoch = epoch;
     this.metadata = Map.copyOf(metadata == null ? Map.of() : metadata);
-    tests.forEach(testId -> units.put(testId, new UnitState(HistoryKeys.parse(testId))));
+    expansion.forEach(
+        (censusId, expanded) -> {
+          registered.add(censusId);
+          List<String> unitIds = new ArrayList<>();
+          for (ClaimableUnit unit : expanded) {
+            unitIds.add(unit.id());
+            units.put(unit.id(), new UnitState(unit));
+          }
+          unitsByCensusId.put(censusId, unitIds);
+        });
+    this.createdAt = now;
+    this.fairShare = new FairShare(shards, now);
     this.lastActivity = now;
   }
 
+  /** Claimable units, expansion included -- the verdict's denominator. */
   int registeredCount() {
     return units.size();
   }
 
+  /** Registered method-level census entries -- stable across history, unlike expansion. */
+  int censusSize() {
+    return registered.size();
+  }
+
+  /** The registration contract: method-level ids, the granularity census equality is judged at. */
   Set<String> censusIds() {
-    return Set.copyOf(units.keySet());
+    return Set.copyOf(registered);
   }
 
   void touch(Instant now) {
     lastActivity = now;
   }
 
-  boolean isRegistered(String testId) {
-    return units.containsKey(testId);
+  boolean inCensus(String censusId) {
+    return registered.contains(censusId);
+  }
+
+  boolean isRegistered(String unitId) {
+    return units.containsKey(unitId);
+  }
+
+  /** The consumer-declared fleet size; the fair-share policy is its only reader. */
+  void declareFleet(Integer shardCount) {
+    fairShare.declareFleet(shardCount);
   }
 
   void join(int shard, Instant now) {
@@ -134,13 +177,10 @@ final class Session {
       info.completedPass = null;
       info.released = false;
     }
+    fairShare.epochBumped();
   }
 
-  boolean claimableIn(String testId, Pass pass) {
-    return claimableIn(units.get(testId), pass);
-  }
-
-  private static boolean claimableIn(UnitState unit, Pass pass) {
+  static boolean claimableIn(UnitState unit, Pass pass) {
     return switch (pass) {
       case MAIN -> unit.state == TestState.PENDING;
       case RETRY1 -> unit.state == TestState.FAILED && unit.failedIn == Pass.MAIN;
@@ -148,17 +188,73 @@ final class Session {
     };
   }
 
-  /** Every census unit the given pass could grant right now, in registration order. */
-  List<CensusUnit> claimable(Pass pass) {
+  /** Every claimable unit the given pass could grant right now, in registration order. */
+  List<ClaimableUnit> claimable(Pass pass) {
     return units.values().stream()
         .filter(unit -> claimableIn(unit, pass))
         .map(unit -> unit.unit)
         .toList();
   }
 
-  /** The parsed form of a unit already known to be registered. */
-  CensusUnit unitOf(String testId) {
-    return units.get(testId).unit;
+  /** The expanded form of a unit already known to be held by this session. */
+  ClaimableUnit unitOf(String unitId) {
+    return units.get(unitId).unit;
+  }
+
+  /** The claimable units behind one method-level candidate: itself, or its expansion. */
+  List<ClaimableUnit> claimableUnitsOf(String censusId, Pass pass) {
+    return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
+        .map(units::get)
+        .filter(unit -> claimableIn(unit, pass))
+        .map(unit -> unit.unit)
+        .toList();
+  }
+
+  /**
+   * A probe materialised, so the parameter set grew past everything recorded: the next
+   * position becomes a probe in turn, and the hand-out walks the growth one position at a
+   * time within the same session. Added only once, and only while the method still exists
+   * in this census; returns whether this call was the one that added it.
+   */
+  boolean addProbe(ClaimableUnit unit) {
+    if (units.containsKey(unit.id()) || !registered.contains(unit.censusId())) {
+      return false;
+    }
+    units.put(unit.id(), new UnitState(unit));
+    unitsByCensusId.get(unit.censusId()).add(unit.id());
+    return true;
+  }
+
+  /**
+   * A vanished probe: the shard proved the position does not exist, so the unit leaves the
+   * census entirely -- it was never a test, and leaving it PENDING would turn every clean
+   * run into an INCOMPLETE verdict.
+   */
+  void removeVanishedProbe(String unitId) {
+    UnitState unit = units.remove(unitId);
+    if (unit != null) {
+      unitsByCensusId.get(unit.unit.censusId()).remove(unitId);
+    }
+  }
+
+  /** True when every measured (non-probe) unit of the method absorbed without failing. */
+  boolean measuredUnitsAllNonFailing(String censusId) {
+    return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
+        .map(units::get)
+        .filter(unit -> !unit.unit.probe())
+        .allMatch(unit -> unit.state == TestState.PASSED || unit.state == TestState.SKIPPED);
+  }
+
+  /** The open ask came back empty for this shard: it will not ask again in this pass. */
+  void markExhausted(int shard, Pass pass) {
+    fairShare.markExhausted(shard, pass);
+  }
+
+  /** How many more of the method's invocations this shard may lease: {@link FairShare}. */
+  int invocationAllowance(String censusId, int shard, Pass pass, Instant now) {
+    List<UnitState> unitsOfMethod =
+        unitsByCensusId.getOrDefault(censusId, List.of()).stream().map(units::get).toList();
+    return fairShare.invocationAllowance(unitsOfMethod, shard, pass, now);
   }
 
   Pass completedPassOf(int shard) {
@@ -462,14 +558,14 @@ final class Session {
         : new SessionView.LeaseView(unit.lease.shard(), unit.lease.fence(), unit.lease.expiresAt());
   }
 
-  @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-  private static final class UnitState {
-    private final CensusUnit unit;
-    private TestState state = TestState.PENDING;
-    private Pass failedIn;
-    private Lease lease;
-    private String reason;
-    private final List<SessionView.RecordView> records = new ArrayList<>();
+  @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
+  static final class UnitState {
+    final ClaimableUnit unit;
+    TestState state = TestState.PENDING;
+    Pass failedIn;
+    Lease lease;
+    String reason;
+    final List<SessionView.RecordView> records = new ArrayList<>();
   }
 
   record Lease(
@@ -481,12 +577,12 @@ final class Session {
       TestState origin,
       Pass originFailedIn) {}
 
-  private static final class ShardInfo {
-    private boolean departed;
-    private boolean explicitlyDeparted;
-    private int completed;
-    private Pass completedPass;
-    private boolean released;
-    private Instant lastSeenAt;
+  static final class ShardInfo {
+    boolean departed;
+    boolean explicitlyDeparted;
+    int completed;
+    Pass completedPass;
+    boolean released;
+    Instant lastSeenAt;
   }
 }

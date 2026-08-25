@@ -13,8 +13,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestExecutionResult;
@@ -40,14 +40,19 @@ class CoordinatedShardingE2EIT {
   private static GenericContainer<?> coordinator;
   private static String url;
 
-  @BeforeAll
-  static void start() {
+  // A container per test, not per class: the coordinator records per-invocation
+  // durations, and a session that completes a parameterized method leaves the next
+  // session a distribution plan for it. Every assertion here is about the cold,
+  // first-contact behaviour -- a template leasing whole included -- so each test gets a
+  // coordinator that has never seen the suite.
+  @BeforeEach
+  void start() {
     coordinator = ShardingHarness.startCoordinator();
     url = ShardingHarness.urlOf(coordinator);
   }
 
-  @AfterAll
-  static void stop() {
+  @AfterEach
+  void stop() {
     coordinator.stop();
   }
 

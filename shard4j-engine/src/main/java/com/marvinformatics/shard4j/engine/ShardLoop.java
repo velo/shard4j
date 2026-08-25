@@ -18,7 +18,6 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.junit.platform.engine.ExecutionRequest;
@@ -121,15 +120,8 @@ final class ShardLoop {
    */
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
-        ledger.drainAll(
-            unit ->
-                "Abandoned on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "): "
-                    + cause
-                    + "; returned to the pool");
+        Reconciliation.abandoned(
+            ledger.drainAll(), configuration.shardIndex(), configuration.pass(), cause);
     if (nacks.isEmpty()) {
       return;
     }
@@ -303,33 +295,29 @@ final class ShardLoop {
 
   /**
    * The pass epilogue. A stale unique-id selector is dropped by the nested discovery in
-   * complete silence -- no event, no error, clean exit -- so nothing else in the system can
-   * notice that a claimed unit was never run. Anything still leased here is explicitly
-   * NACKed back to the pool and the shard fails naming the ids, because a lease this
-   * engine cannot explain is a bug in the engine, never a property of the suite.
+   * complete silence -- no event, no error, clean exit -- so this drain is the only place
+   * a claimed-but-never-run unit can be noticed at all. What each unexplained lease
+   * means, the wording of its NACK and the failure message are {@link Reconciliation}'s;
+   * this method drains, NACKs, and fails when the classification says so.
    */
   private void reconcileOrFail() {
-    List<NackRequest.NackedLease> nacks =
-        ledger.drainAll(
-            unit ->
-                "Leased but never produced a terminal outcome on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "); returned to the pool");
-    if (nacks.isEmpty()) {
+    List<Grant> unexplained = ledger.drainAll();
+    if (unexplained.isEmpty()) {
       return;
     }
-    gateway.nack(nacks);
-    throw new ShardExecutionException(
-        "Shard "
-            + configuration.shardIndex()
-            + " could not reconcile "
-            + nacks.size()
-            + " leased unit(s) to a terminal outcome; they were NACKed back to the pool: "
-            + nacks.stream()
-                .map(NackRequest.NackedLease::testId)
-                .collect(Collectors.joining(", ")));
+    Reconciliation reconciliation =
+        Reconciliation.classify(unexplained, configuration.shardIndex(), configuration.pass());
+    gateway.nack(reconciliation.nacks());
+    if (reconciliation.failure() == null) {
+      log.log(
+          System.Logger.Level.INFO,
+          "Shard "
+              + configuration.shardIndex()
+              + ": every unexplained lease was a cardinality probe; parameter counts"
+              + " confirmed");
+      return;
+    }
+    throw new ShardExecutionException(reconciliation.failure());
   }
 
   /**

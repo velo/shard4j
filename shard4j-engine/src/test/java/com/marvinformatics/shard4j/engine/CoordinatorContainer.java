@@ -13,11 +13,13 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 import lombok.experimental.UtilityClass;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
@@ -140,6 +142,49 @@ class CoordinatorContainer {
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
+  }
+
+  /**
+   * One template that ran whole and passed, exactly as the coordinator records it: the
+   * unit row plus one row per invocation -- which is what makes the breakdown a complete,
+   * distributable plan on the next boot.
+   */
+  void seedTemplateHistory(
+      Path dataDir, String templateId, Map<Integer, Long> durationMsByPosition) {
+    try {
+      Path historyDir = dataDir.resolve(TENANT_SLUG).resolve("history");
+      Files.createDirectories(historyDir);
+      long total = durationMsByPosition.values().stream().mapToLong(Long::longValue).sum();
+      StringBuilder lines = new StringBuilder(historyLine(templateId, true, total));
+      new TreeMap<>(durationMsByPosition)
+          .forEach(
+              (position, durationMs) ->
+                  lines.append(
+                      historyLine(
+                          templateId + "/[test-template-invocation:#" + position + "]",
+                          false,
+                          durationMs)));
+      Files.writeString(
+          historyDir.resolve(LocalDate.now(ZoneOffset.UTC) + ".jsonl"),
+          lines.toString(),
+          StandardOpenOption.CREATE,
+          StandardOpenOption.APPEND);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private String historyLine(String testId, boolean unit, long durationMs) {
+    return "{\"type\":\"COMPLETION\",\"project\":\""
+        + TENANT_KEY
+        + "\",\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
+        + testId
+        + "\",\"unit\":"
+        + unit
+        + ",\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\",\"durationMs\":"
+        + durationMs
+        + (unit ? ",\"firstOnShard\":false" : "")
+        + ",\"ts\":\"2026-08-20T10:00:00Z\"}\n";
   }
 
   private String currentUidGid() {

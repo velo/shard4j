@@ -9,5 +9,12 @@ import java.util.List;
  */
 public record NackRequest(int shard, List<NackedLease> leases) {
 
-  public record NackedLease(String testId, Fence fence, String reason) {}
+  /**
+   * {@code vanished} means the shard proved the id does not exist in the current
+   * discovery: the nested execution selected it and JUnit materialised nothing. For a
+   * probe the coordinator absorbs that as confirmation of the recorded parameter count;
+   * for a measured invocation it means the parameter set changed since it was last
+   * measured, and the stale position is dropped from duration history.
+   */
+  public record NackedLease(String testId, Fence fence, String reason, boolean vanished) {}
 }

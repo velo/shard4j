@@ -6,6 +6,7 @@ import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
 import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
 import com.marvinformatics.shard4j.protocol.BarrierRequest;
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -57,7 +58,7 @@ public final class CoordinatorCore {
   private final Map<String, Session> sessions = new HashMap<>();
   private final SessionLog sessionLog;
   private final HistoryLog historyLog;
-  private final DurationStore durations;
+  private final InvocationDistribution distribution;
   private final Clock clock;
   private final String tenantKey;
   private final long incarnation;
@@ -82,7 +83,7 @@ public final class CoordinatorCore {
       Duration gcIdle) {
     this.sessionLog = sessionLog;
     this.historyLog = historyLog;
-    this.durations = durations;
+    this.distribution = new InvocationDistribution(durations);
     this.clock = clock;
     this.tenantKey = tenantKey;
     this.incarnation = incarnation;
@@ -112,7 +113,7 @@ public final class CoordinatorCore {
                 request.attempt(),
                 1,
                 request.metadata(),
-                request.tests(),
+                distribution.expandCensus(request.tests()),
                 now);
         sessions.put(sessionId, session);
         log.info(
@@ -141,8 +142,12 @@ public final class CoordinatorCore {
               newEpoch);
         }
       }
+      session.declareFleet(request.shardCount());
       joinLogged(sessionId, session, request.shard(), now);
-      return new RegisterResponse(session.epoch(), session.registeredCount());
+      // The census size, not the expanded unit count: expansion varies with duration
+      // history, and a figure printed every run to be noticed must only move when the
+      // suite itself does.
+      return new RegisterResponse(session.epoch(), session.censusSize());
     }
   }
 
@@ -152,7 +157,7 @@ public final class CoordinatorCore {
       Session session = requireSession(sessionId, now);
       sweepSilentShards(sessionId, session, now);
       for (String candidate : request.candidates()) {
-        if (!session.isRegistered(candidate)) {
+        if (!session.inCensus(candidate)) {
           throw new UnregisteredTestException(candidate);
         }
       }
@@ -162,12 +167,11 @@ public final class CoordinatorCore {
         session.touch(now);
         return new ClaimResponse(List.of());
       }
-      List<CensusUnit> claimable =
+      List<ClaimableUnit> claimable =
           request.candidates().stream()
-              .filter(candidate -> session.claimableIn(candidate, request.pass()))
-              .map(session::unitOf)
+              .flatMap(candidate -> session.claimableUnitsOf(candidate, request.pass()).stream())
               .toList();
-      List<CensusUnit> ordered = ClaimOrdering.order(claimable, durations::estimate);
+      List<ClaimableUnit> ordered = orderFor(claimable);
       List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
@@ -197,33 +201,67 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<CensusUnit> ordered =
-          ClaimOrdering.order(session.claimable(request.pass()), durations::estimate);
-      if (ordered.isEmpty()) {
-        joinLogged(sessionId, session, request.shard(), now);
-        return new NextClassResponse(null, List.of());
+      List<ClaimableUnit> ordered = orderFor(session.claimable(request.pass()));
+      Set<String> triedClasses = new LinkedHashSet<>();
+      for (ClaimableUnit top : ordered) {
+        String className = top.className();
+        if (!triedClasses.add(className)) {
+          continue;
+        }
+        List<ClaimableUnit> inChosenClass =
+            ordered.stream().filter(unit -> className.equals(unit.className())).toList();
+        List<Grant> granted =
+            grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+        if (!granted.isEmpty()) {
+          joinLogged(sessionId, session, request.shard(), now);
+          return new NextClassResponse(className, granted);
+        }
+        // Everything in this class is capped for this shard right now: its share of the
+        // class's invocations is taken and the rest is held for shards still working or
+        // still arriving. The next class in the schedule may still have work for it.
       }
-      String className = ordered.get(0).className();
-      List<CensusUnit> inChosenClass =
-          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
-      List<Grant> granted =
-          grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+      // The empty answer is a commitment: the shard's pull loop stops on it, so it is
+      // remembered -- the fair-share cap must never again hold anything back for a shard
+      // that will not ask.
+      session.markExhausted(request.shard(), request.pass());
       joinLogged(sessionId, session, request.shard(), now);
-      return new NextClassResponse(className, granted);
+      return new NextClassResponse(null, List.of());
     }
   }
 
-  /** Leases the capped prefix of an already-ordered claimable list. */
+  /**
+   * Leases the capped prefix of an already-ordered claimable list. Whole units lease
+   * freely, exactly as before distribution existed; expanded invocation units are
+   * additionally held to the method's fair-share allowance, so one fast asker cannot take
+   * a template whose spreading is the entire point of expanding it.
+   */
   private List<Grant> grantCapped(
-      Session session, int shard, Pass pass, List<CensusUnit> ordered, Instant now) {
+      Session session, int shard, Pass pass, List<ClaimableUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
-    for (CensusUnit unit : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
+    Map<String, Integer> allowanceLeft = new HashMap<>();
+    for (ClaimableUnit unit : ordered) {
+      if (granted.size() >= maxClaimBatch) {
+        break;
+      }
+      if (unit.invocation() != null) {
+        int left =
+            allowanceLeft.computeIfAbsent(
+                unit.censusId(), id -> session.invocationAllowance(id, shard, pass, now));
+        if (left <= 0) {
+          continue;
+        }
+        allowanceLeft.put(unit.censusId(), left - 1);
+      }
       Fence fence = new Fence(session.epoch(), incarnation, ++seq);
       Instant expiresAt = now.plus(leaseTtl);
       session.lease(unit.id(), shard, pass, fence, now, expiresAt);
-      granted.add(new Grant(unit.id(), fence, expiresAt));
+      granted.add(new Grant(unit.id(), fence, expiresAt, unit.probe()));
     }
     return granted;
+  }
+
+  private List<ClaimableUnit> orderFor(List<ClaimableUnit> claimable) {
+    return ClaimOrdering.order(claimable, distribution::estimateOf);
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {
@@ -302,10 +340,7 @@ public final class CoordinatorCore {
           reason,
           now);
       appendHistory(sessionId, session.epoch(), request, reason, now);
-      if (request.outcome() == Outcome.PASSED) {
-        durations.recordPassed(
-            HistoryKeys.of(request.testId()), sessionId, request.durationMs(), request.firstOnShard());
-      }
+      distribution.recordDurations(sessionId, session, request);
       return new ResultResponse(true, null);
     }
   }
@@ -325,7 +360,16 @@ public final class CoordinatorCore {
           session.recordNack(lease, now);
           sessionLog.appendQuietly(
               LogRecord.nack(
-                  tenantKey, sessionId, request.shard(), lease.testId(), truncate(lease.reason()), now));
+                  tenantKey,
+                  sessionId,
+                  request.shard(),
+                  lease.testId(),
+                  truncate(lease.reason()),
+                  lease.vanished(),
+                  now));
+          if (lease.vanished()) {
+            distribution.applyVanished(sessionId, session, lease.testId());
+          }
           released.add(lease.testId());
         } else {
           rejected.add(lease.testId());
@@ -449,7 +493,7 @@ public final class CoordinatorCore {
               record.attempt(),
               record.epoch(),
               record.metadata(),
-              record.tests(),
+              distribution.expandCensus(record.tests()),
               record.ts()));
       return;
     }
@@ -497,9 +541,18 @@ public final class CoordinatorCore {
 
   private void replayNack(LogRecord record) {
     Session session = sessions.get(record.session());
-    if (session != null) {
-      session.recordNack(
-          new NackRequest.NackedLease(record.testId(), null, record.reason()), record.ts());
+    if (session == null) {
+      return;
+    }
+    boolean vanished = Boolean.TRUE.equals(record.vanished());
+    session.recordNack(
+        new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished), record.ts());
+    // Only the census correction is replayed; the duration-store drop lives in the
+    // snapshot. A re-expansion that resurrects the probe merely re-probes and re-vanishes.
+    if (vanished
+        && session.isRegistered(record.testId())
+        && session.unitOf(record.testId()).probe()) {
+      session.removeVanishedProbe(record.testId());
     }
   }
 
@@ -621,6 +674,9 @@ public final class CoordinatorCore {
     if (request.attempt() < 1) {
       throw new ProtocolViolationException("attempt must be a positive integer");
     }
+    if (request.shardCount() != null && request.shardCount() < 1) {
+      throw new ProtocolViolationException("shardCount must be a positive integer when present");
+    }
     if (request.tests() == null || request.tests().isEmpty()) {
       throw new ProtocolViolationException(
           "A census must enumerate at least one lease unit; an empty enumeration is the"
@@ -632,14 +688,15 @@ public final class CoordinatorCore {
         throw new ProtocolViolationException(
             "Execution ids must be rooted at " + REQUIRED_ID_PREFIX + "...]: " + testId);
       }
-      if (testId.contains("[test-template-invocation:")) {
-        throw new ProtocolViolationException(
-            "An invocation id is a record id, never a lease unit: " + testId);
-      }
+      CensusUnit unit;
       try {
-        HistoryKeys.of(testId);
+        unit = CensusUnit.parse(testId);
       } catch (IllegalArgumentException e) {
         throw new ProtocolViolationException(e.getMessage());
+      }
+      if (unit.invocation() != null) {
+        throw new ProtocolViolationException(
+            "An invocation id is a record id, never a lease unit: " + testId);
       }
       if (!seen.add(testId)) {
         throw new ProtocolViolationException("Duplicate lease unit in census: " + testId);

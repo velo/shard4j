@@ -86,6 +86,44 @@ class UnitOutcomeListenerTest {
     }
   }
 
+  private static String rowsTemplate() {
+    return "[engine:junit-jupiter]/[class:" + ROWS + "]/[test-template:rows(java.lang.String)]";
+  }
+
+  private static String rowsInvocation(int position) {
+    return rowsTemplate() + "/[test-template-invocation:#" + position + "]";
+  }
+
+  @Test
+  void givenLeasedInvocations_whenExecuting_thenEachFinalizesItselfAndUnselectedRowsNeverRun() {
+    Map<String, UnitResult> results = execute(rowsInvocation(1), rowsInvocation(3));
+
+    // Each leased invocation is its own unit with its own terminal outcome and no
+    // aggregate row list; the unselected middle row (which would fail) never executed.
+    assertThat(results).containsOnlyKeys(rowsInvocation(1), rowsInvocation(3));
+    assertThat(results.get(rowsInvocation(1)).outcome()).isEqualTo(Outcome.PASSED);
+    assertThat(results.get(rowsInvocation(3)).outcome()).isEqualTo(Outcome.PASSED);
+    assertThat(results.get(rowsInvocation(1)).invocations()).isNull();
+  }
+
+  @Test
+  void givenALeasedFailingInvocation_whenExecuting_thenItFailsAloneUnderItsOwnId() {
+    Map<String, UnitResult> results = execute(rowsInvocation(2));
+
+    assertThat(results).containsOnlyKeys(rowsInvocation(2));
+    assertThat(results.get(rowsInvocation(2)).outcome()).isEqualTo(Outcome.FAILED);
+    assertThat(results.get(rowsInvocation(2)).reason()).contains("row rejected");
+  }
+
+  @Test
+  void givenAStaleInvocationPastTheParameterSet_whenExecuting_thenItVanishesInSilence() {
+    // The property reconciliation exists for: JUnit materialises nothing for a selected
+    // position that does not exist -- no event, no error, a clean exit.
+    Map<String, UnitResult> results = execute(rowsInvocation(1), rowsInvocation(4));
+
+    assertThat(results).containsOnlyKeys(rowsInvocation(1));
+  }
+
   @Test
   void givenAFailingRow_whenATemplateUnitCompletes_thenTheAggregateFailsAndRowsAreIndividual() {
     String unit = "[engine:junit-jupiter]/[class:" + ROWS + "]/[test-template:rows(java.lang.String)]";

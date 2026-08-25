@@ -63,8 +63,8 @@ class TwoSlotBarrierIT {
     String alpha = Ids.method(ALPHA_CLASS, "alpha");
     String beta = Ids.method(BETA_CLASS, "beta");
     List<String> census = List.of(alpha, beta);
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
 
     // Shard 0's two slots: two open asks, two different classes, both leases outstanding.
     NextClassResponse firstAsk =

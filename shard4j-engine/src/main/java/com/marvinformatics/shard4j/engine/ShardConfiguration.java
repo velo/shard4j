@@ -31,6 +31,9 @@ import org.junit.platform.engine.ConfigurationParameters;
  * @param concurrency how many classes this shard drains at once; 1 keeps today's strictly
  *     serial behaviour, and anything higher requires the consumer's classes to tolerate
  *     running concurrently in one JVM
+ * @param shardCount how many shards this run launched, when the consumer knows it; null
+ *     otherwise. Forwarded to the coordinator as a balancing hint so a template's
+ *     invocations can be held back for shards that have not registered yet
  */
 public record ShardConfiguration(
     boolean enabled,
@@ -41,6 +44,7 @@ public record ShardConfiguration(
     Pass pass,
     int attempt,
     int concurrency,
+    Integer shardCount,
     Map<String, String> metadata,
     Duration retryBudget,
     Instant deadline,
@@ -55,6 +59,7 @@ public record ShardConfiguration(
   static final String PASS = "shard.pass";
   static final String ATTEMPT = "shard.attempt";
   static final String CONCURRENCY = "shard.concurrency";
+  static final String SHARD_COUNT = "shard.count";
   static final String METADATA_PREFIX = "shard.metadata.";
   static final String RETRY_BUDGET = "shard.coordinator.retry.budget";
   static final String DEADLINE = "shard.deadline";
@@ -69,7 +74,7 @@ public record ShardConfiguration(
   /** The inert engine: no network call, nothing claimed, an empty discovery. */
   public static ShardConfiguration disabled() {
     return new ShardConfiguration(
-        false, null, null, null, -1, null, 1, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+        false, null, null, null, -1, null, 1, 1, null, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
   }
 
   static ShardConfiguration resolve(
@@ -87,6 +92,7 @@ public record ShardConfiguration(
         resolver.pass(),
         resolver.positiveInt(ATTEMPT, 1),
         resolver.positiveInt(CONCURRENCY, 1),
+        resolver.shardCount(),
         resolver.metadata(),
         resolver.duration(RETRY_BUDGET, DEFAULT_RETRY_BUDGET),
         resolver.deadline(),
@@ -161,6 +167,10 @@ public record ShardConfiguration(
         throw new ShardConfigurationException(
             PASS + " must be one of main, retry1, retry2 -- got: " + value);
       }
+    }
+
+    private Integer shardCount() {
+      return value(SHARD_COUNT) == null ? null : positiveInt(SHARD_COUNT, 1);
     }
 
     private int positiveInt(String key, int absentMeans) {

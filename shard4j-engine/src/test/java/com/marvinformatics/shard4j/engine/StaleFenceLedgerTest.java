@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Grant;
-import com.marvinformatics.shard4j.protocol.NackRequest;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -35,11 +34,10 @@ class StaleFenceLedgerTest {
 
     ledger.explain(UNIT, STALE_FENCE);
 
-    List<NackRequest.NackedLease> nacks = ledger.drainAll(unit -> "Abandoned: " + unit);
-    assertThat(nacks).hasSize(1);
-    assertThat(nacks.get(0).testId()).isEqualTo(UNIT);
-    assertThat(nacks.get(0).fence()).isEqualTo(LIVE_FENCE);
-    assertThat(nacks.get(0).reason()).isEqualTo("Abandoned: " + UNIT);
+    List<Grant> drained = ledger.drainAll();
+    assertThat(drained).hasSize(1);
+    assertThat(drained.get(0).testId()).isEqualTo(UNIT);
+    assertThat(drained.get(0).fence()).isEqualTo(LIVE_FENCE);
   }
 
   @Test
@@ -48,18 +46,18 @@ class StaleFenceLedgerTest {
 
     ledger.explain(UNIT, LIVE_FENCE);
 
-    assertThat(ledger.drainAll(unit -> "unused")).isEmpty();
+    assertThat(ledger.drainAll()).isEmpty();
   }
 
   @Test
   void givenADrainedLedger_whenDrainedAgain_thenTheSecondDrainIsANoOp() {
     ledger.track(List.of(grant(LIVE_FENCE)));
 
-    assertThat(ledger.drainAll(unit -> "first")).hasSize(1);
-    assertThat(ledger.drainAll(unit -> "second")).isEmpty();
+    assertThat(ledger.drainAll()).hasSize(1);
+    assertThat(ledger.drainAll()).isEmpty();
   }
 
   private static Grant grant(Fence fence) {
-    return new Grant(UNIT, fence, Instant.now().plusSeconds(60));
+    return new Grant(UNIT, fence, Instant.now().plusSeconds(60), false);
   }
 }

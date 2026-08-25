@@ -2,6 +2,7 @@ package com.marvinformatics.shard4j.coordinator.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,13 +17,16 @@ class ClaimOrderingTest {
     return "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]/[method:" + method + "()]";
   }
 
-  private static CensusUnit unit(String method) {
-    return HistoryKeys.parse(id(method));
+  private static ClaimableUnit unit(String method) {
+    String executionId = id(method);
+    return new ClaimableUnit(executionId, CensusUnit.parse(executionId), false);
   }
 
   private static List<String> orderedIds(
-      List<CensusUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
-    return ClaimOrdering.order(candidates, estimates).stream().map(CensusUnit::id).toList();
+      List<ClaimableUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
+    return ClaimOrdering.order(candidates, unit -> estimates.apply(unit.historyKey())).stream()
+        .map(ClaimableUnit::id)
+        .toList();
   }
 
   @Test
@@ -46,12 +50,14 @@ class ClaimOrderingTest {
   void noHistoryMeansPinnedHashOrder() {
     List<String> ids = List.of(id("aaa"), id("bbb"), id("ccc"), id("ddd"));
     List<String> ordered =
-        orderedIds(ids.stream().map(HistoryKeys::parse).toList(), key -> OptionalLong.empty());
+        orderedIds(
+            ids.stream().map(id -> new ClaimableUnit(id, CensusUnit.parse(id), false)).toList(),
+            key -> OptionalLong.empty());
 
     List<String> expected = new ArrayList<>(ids);
     expected.sort(
         (left, right) ->
-            HistoryKey.NO_HISTORY_ORDER.compare(HistoryKeys.of(left), HistoryKeys.of(right)));
+            HistoryKey.NO_HISTORY_ORDER.compare(CensusUnit.historyKeyOf(left), CensusUnit.historyKeyOf(right)));
     assertThat(ordered).containsExactlyElementsOf(expected);
   }
 
@@ -64,6 +70,25 @@ class ClaimOrderingTest {
                 key.value().contains("mystery") ? OptionalLong.empty() : OptionalLong.of(50_000L));
     assertThat(ordered.get(0)).isEqualTo(id("mystery"));
     assertThat(ordered).hasSize(3);
+  }
+
+  @Test
+  void probesComeLastEvenBehindKnownsAndOtherUnknowns() {
+    String template =
+        "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
+            + "/[test-template:rows(java.lang.String)]";
+    ClaimableUnit measured =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(1), false);
+    ClaimableUnit probe =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(2), true);
+    List<ClaimableUnit> ordered =
+        ClaimOrdering.order(
+            List.of(probe, measured, unit("mystery"), unit("known")),
+            unit ->
+                unit.historyKey().value().contains("mystery")
+                    ? OptionalLong.empty()
+                    : OptionalLong.of(10_000L));
+    assertThat(ordered).containsExactly(unit("mystery"), unit("known"), measured, probe);
   }
 
   @Test

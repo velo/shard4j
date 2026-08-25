@@ -63,9 +63,9 @@ class BarrierSilentDeathIT {
     String doomed = Ids.method(CLASS_NAME, "diesWithItsShard");
     List<String> census = List.of(flaky, doomed);
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), census));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
     client.register(
-        sessionId, new RegisterRequest(1, 1, Map.of(), census));
+        sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
 
     // Shard 1 claims its unit and is never heard from again.
     client.claimOne(sessionId, 1, doomed);

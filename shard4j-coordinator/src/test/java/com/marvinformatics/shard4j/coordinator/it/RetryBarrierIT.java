@@ -60,7 +60,7 @@ class RetryBarrierIT {
   }
 
   private static RegisterRequest registration(int shard, List<String> census) {
-    return new RegisterRequest(shard, 1, Map.of(), census);
+    return new RegisterRequest(shard, 1, Map.of(), census, null);
   }
 
   private static ResultRequest result(
@@ -281,7 +281,7 @@ class RetryBarrierIT {
     client.nack(
         sessionId,
         new NackRequest(
-            1, List.of(new NackRequest.NackedLease(stranded, strandedFence, "job deadline"))));
+            1, List.of(new NackRequest.NackedLease(stranded, strandedFence, "job deadline", false))));
     client.depart(sessionId, new DepartRequest(1, 1));
 
     // The departed shard no longer holds the barrier; the survivor runs the retry alone.
@@ -449,7 +449,7 @@ class RetryBarrierIT {
 
     // A registration at a higher attempt: the old shards are known-dead, the epoch moves on.
     client.register(
-        sessionId, new RegisterRequest(5, 2, Map.of(), census));
+        sessionId, new RegisterRequest(5, 2, Map.of(), census, null));
 
     CoordinatorClient.RawResponse zombiePoll =
         client.barrierRaw(sessionId, new BarrierRequest(0, 1, Pass.MAIN));

@@ -2,7 +2,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.marvinformatics.shard4j.coordinator.core.HistoryKeys;
+import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
@@ -67,7 +67,7 @@ class NextClassIT {
   @Test
   void givenPartialHistory_whenAskingWhatNext_thenClassesArriveUnknownsFirstThenSlowestFirstUntilNothingRemains() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census()));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census(), null));
 
     // The class holding no-history units beats the class with the biggest measured
     // duration, and inside it the unknowns lead in pinned hash order before its known unit.
@@ -75,7 +75,7 @@ class NextClassIT {
     assertThat(first.className()).isEqualTo(MIXED);
     List<String> expectedUnknowns = new ArrayList<>(List.of(MIXED_NEW_A, MIXED_NEW_B));
     expectedUnknowns.sort(
-        Comparator.comparing(HistoryKeys::of, HistoryKey.NO_HISTORY_ORDER));
+        Comparator.comparing(CensusUnit::historyKeyOf, HistoryKey.NO_HISTORY_ORDER));
     List<String> expectedMixed = new ArrayList<>(expectedUnknowns);
     expectedMixed.add(MIXED_SMALL);
     assertThat(first.granted()).extracting(Grant::testId).isEqualTo(expectedMixed);
@@ -100,8 +100,8 @@ class NextClassIT {
   @Test
   void givenEverythingLeasedElsewhere_whenAskingWhatNext_thenTheAnswerIsEmptyNotAPromise() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census()));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census()));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census(), null));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census(), null));
 
     NextClassResponse everythingMixed = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
     NextClassResponse everythingBig = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));

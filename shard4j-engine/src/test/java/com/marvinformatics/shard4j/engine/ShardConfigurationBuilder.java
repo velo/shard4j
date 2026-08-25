@@ -14,7 +14,10 @@ final class ShardConfigurationBuilder {
 
   private final String coordinatorUrl;
   private final String sessionId;
+  private int shardIndex;
+  private Pass pass = Pass.MAIN;
   private int concurrency = 1;
+  private Integer shardCount;
 
   private ShardConfigurationBuilder(String coordinatorUrl, String sessionId) {
     this.coordinatorUrl = coordinatorUrl;
@@ -25,8 +28,23 @@ final class ShardConfigurationBuilder {
     return new ShardConfigurationBuilder(coordinatorUrl, sessionId);
   }
 
+  ShardConfigurationBuilder shardIndex(int shardIndex) {
+    this.shardIndex = shardIndex;
+    return this;
+  }
+
+  ShardConfigurationBuilder pass(Pass pass) {
+    this.pass = pass;
+    return this;
+  }
+
   ShardConfigurationBuilder concurrency(int concurrency) {
     this.concurrency = concurrency;
+    return this;
+  }
+
+  ShardConfigurationBuilder shardCount(int shardCount) {
+    this.shardCount = shardCount;
     return this;
   }
 
@@ -36,10 +54,11 @@ final class ShardConfigurationBuilder {
         coordinatorUrl,
         CoordinatorContainer.SECRET,
         sessionId,
-        0,
-        Pass.MAIN,
+        shardIndex,
+        pass,
         1,
         concurrency,
+        shardCount,
         Map.of(),
         Duration.ofSeconds(30),
         null,
