@@ -10,7 +10,6 @@ import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -122,19 +121,9 @@ class CrossClassOrderIT {
   }
 
   private static ShardConfiguration configuration(String sessionId) {
-    return new ShardConfiguration(
-        true,
-        CoordinatorContainer.urlOf(coordinator),
-        CoordinatorContainer.SECRET,
-        sessionId,
-        0,
-        Pass.MAIN,
-        1,
-        1,
-        Map.of(),
-        Duration.ofSeconds(30),
-        null,
-        true);
+    return ShardConfigurationBuilder.coordinatedShard(
+            CoordinatorContainer.urlOf(coordinator), sessionId)
+        .build();
   }
 
   private static ShardLoop shardLoop(ShardConfiguration configuration, DiscoveredCensus census) {

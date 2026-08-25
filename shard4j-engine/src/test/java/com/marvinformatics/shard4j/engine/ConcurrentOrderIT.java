@@ -4,9 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -57,19 +55,10 @@ class ConcurrentOrderIT {
   void givenTwoDrainSlots_whenAsksInterleave_thenEachAskNamesTheSlowestRemainingClass() {
     String sessionId = UUID.randomUUID().toString();
     ShardConfiguration configuration =
-        new ShardConfiguration(
-            true,
-            CoordinatorContainer.urlOf(coordinator),
-            CoordinatorContainer.SECRET,
-            sessionId,
-            0,
-            Pass.MAIN,
-            1,
-            2,
-            Map.of(),
-            Duration.ofSeconds(30),
-            null,
-            true);
+        ShardConfigurationBuilder.coordinatedShard(
+            CoordinatorContainer.urlOf(coordinator), sessionId)
+        .concurrency(2)
+        .build();
     DiscoveredCensus census =
         DiscoveredCensus.of(
             List.of(

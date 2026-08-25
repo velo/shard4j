@@ -3,10 +3,8 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -49,19 +47,9 @@ class ClassDrainIT {
   void givenClaimBatchesSmallerThanTheClass_whenRunning_thenTheClassSetupRunsExactlyOnce() {
     String sessionId = UUID.randomUUID().toString();
     ShardConfiguration configuration =
-        new ShardConfiguration(
-            true,
-            CoordinatorContainer.urlOf(coordinator),
-            CoordinatorContainer.SECRET,
-            sessionId,
-            0,
-            Pass.MAIN,
-            1,
-            1,
-            Map.of(),
-            Duration.ofSeconds(30),
-            null,
-            true);
+        ShardConfigurationBuilder.coordinatedShard(
+            CoordinatorContainer.urlOf(coordinator), sessionId)
+        .build();
     DiscoveredCensus census =
         DiscoveredCensus.of(
             List.of(

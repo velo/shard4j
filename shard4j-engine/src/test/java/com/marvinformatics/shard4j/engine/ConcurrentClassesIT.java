@@ -3,12 +3,9 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -89,19 +86,10 @@ class ConcurrentClassesIT {
   }
 
   private static ShardConfiguration configuration(String sessionId, int concurrency) {
-    return new ShardConfiguration(
-        true,
-        CoordinatorContainer.urlOf(coordinator),
-        CoordinatorContainer.SECRET,
-        sessionId,
-        0,
-        Pass.MAIN,
-        1,
-        concurrency,
-        Map.of(),
-        Duration.ofSeconds(30),
-        null,
-        true);
+    return ShardConfigurationBuilder.coordinatedShard(
+            CoordinatorContainer.urlOf(coordinator), sessionId)
+        .concurrency(concurrency)
+        .build();
   }
 
   private static ShardLoop shardLoop(ShardConfiguration configuration, DiscoveredCensus census) {

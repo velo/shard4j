@@ -66,12 +66,17 @@ public record ShardConfiguration(
     return resolve(parameters, System.getenv());
   }
 
+  /** The inert engine: no network call, nothing claimed, an empty discovery. */
+  public static ShardConfiguration disabled() {
+    return new ShardConfiguration(
+        false, null, null, null, -1, null, 1, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+  }
+
   static ShardConfiguration resolve(
       ConfigurationParameters parameters, Map<String, String> environment) {
     Resolver resolver = new Resolver(parameters, environment);
     if (!resolver.flag(ENABLED, false)) {
-      return new ShardConfiguration(
-          false, null, null, null, -1, null, 1, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+      return disabled();
     }
     return new ShardConfiguration(
         true,
@@ -80,8 +85,8 @@ public record ShardConfiguration(
         resolver.required(SESSION_ID),
         resolver.requiredInt(SHARD_INDEX),
         resolver.pass(),
-        resolver.attempt(),
-        resolver.concurrency(),
+        resolver.positiveInt(ATTEMPT, 1),
+        resolver.positiveInt(CONCURRENCY, 1),
         resolver.metadata(),
         resolver.duration(RETRY_BUDGET, DEFAULT_RETRY_BUDGET),
         resolver.deadline(),
@@ -158,36 +163,19 @@ public record ShardConfiguration(
       }
     }
 
-    private int attempt() {
-      String value = value(ATTEMPT);
+    private int positiveInt(String key, int absentMeans) {
+      String value = value(key);
       if (value == null) {
-        return 1;
+        return absentMeans;
       }
       try {
-        int attempt = Integer.parseInt(value);
-        if (attempt < 1) {
+        int parsed = Integer.parseInt(value);
+        if (parsed < 1) {
           throw new NumberFormatException();
         }
-        return attempt;
+        return parsed;
       } catch (NumberFormatException e) {
-        throw new ShardConfigurationException(ATTEMPT + " must be a positive integer, got: " + value);
-      }
-    }
-
-    private int concurrency() {
-      String value = value(CONCURRENCY);
-      if (value == null) {
-        return 1;
-      }
-      try {
-        int concurrency = Integer.parseInt(value);
-        if (concurrency < 1) {
-          throw new NumberFormatException();
-        }
-        return concurrency;
-      } catch (NumberFormatException e) {
-        throw new ShardConfigurationException(
-            CONCURRENCY + " must be a positive integer, got: " + value);
+        throw new ShardConfigurationException(key + " must be a positive integer, got: " + value);
       }
     }
 
