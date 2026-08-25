@@ -20,7 +20,7 @@
          classpath, so it is free to sit on the current LTS. -->
     <maven.compiler.release>${coordinator.compiler.release}</maven.compiler.release>
     <rewrite.java.recipe>${coordinator.rewrite.java.recipe}</rewrite.java.recipe>
-    <testcontainers.version>1.21.3</testcontainers.version>
+    <testcontainers.version>1.21.4</testcontainers.version>
   </properties>
 
   <dependencyManagement>
