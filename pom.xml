@@ -299,6 +299,23 @@
     <profile>
       <id>release</id>
       <build>
+        <pluginManagement>
+          <plugins>
+            <!-- Version and configuration for every module that declares the plugin.
+                 autoPublish and waitUntil must reach the last publishing module, which
+                 is where the plugin bundles and uploads the whole deployment. -->
+            <plugin>
+              <groupId>org.sonatype.central</groupId>
+              <artifactId>central-publishing-maven-plugin</artifactId>
+              <version>${central-publishing-maven-plugin.version}</version>
+              <configuration>
+                <publishingServerId>central</publishingServerId>
+                <autoPublish>true</autoPublish>
+                <waitUntil>published</waitUntil>
+              </configuration>
+            </plugin>
+          </plugins>
+        </pluginManagement>
         <plugins>
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
@@ -344,16 +361,23 @@
               </execution>
             </executions>
           </plugin>
+          <!-- inherited=false, and each published module declares the plugin itself.
+               The plugin's publish goal hard-fails on any module whose build attaches
+               no file at all: "The packaging for this project did not assign a file
+               to the build artifact", which is what killed the 0.1.1 release on
+               shard4j-example. maven.deploy.skip and skipPublishing do not help: the
+               plugin never reads the former, and consults the latter only after it has
+               collected the module's artifacts, and the collection itself is what throws.
+               The plugin also decides where
+               to bundle-and-upload by looking for the last reactor module that
+               *declares* it, whether or not it runs there, so shard4j-example must not
+               have it in its model at all: with it, publishing dies; with it declared
+               but unbound, the upload step silently never runs. -->
           <plugin>
             <groupId>org.sonatype.central</groupId>
             <artifactId>central-publishing-maven-plugin</artifactId>
-            <version>${central-publishing-maven-plugin.version}</version>
             <extensions>true</extensions>
-            <configuration>
-              <publishingServerId>central</publishingServerId>
-              <autoPublish>true</autoPublish>
-              <waitUntil>published</waitUntil>
-            </configuration>
+            <inherited>false</inherited>
           </plugin>
         </plugins>
       </build>
