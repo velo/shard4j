@@ -61,6 +61,6 @@ class EndpointRecordsTest {
     assertEquals(61, response.registeredCount());
     assertEquals(
         Map.of("ci", "github-actions"),
-        new RegisterRequest(3, 2, Map.of("ci", "github-actions"), "hash", List.of()).metadata());
+        new RegisterRequest(3, 2, Map.of("ci", "github-actions"), List.of()).metadata());
   }
 }

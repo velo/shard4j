@@ -26,7 +26,6 @@ public record LogRecord(
     Integer attempt,
     Long epoch,
     Map<String, String> metadata,
-    String testSetHash,
     List<String> tests,
     String testId,
     Boolean unit,
@@ -54,7 +53,6 @@ public record LogRecord(
       int attempt,
       long epoch,
       Map<String, String> metadata,
-      String testSetHash,
       List<String> tests,
       Instant ts) {
     return LogRecord.builder()
@@ -64,7 +62,6 @@ public record LogRecord(
         .attempt(attempt)
         .epoch(epoch)
         .metadata(metadata)
-        .testSetHash(testSetHash)
         .tests(tests)
         .ts(ts)
         .build();

@@ -1,0 +1,171 @@
+package com.example.orders;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import static org.assertj.core.groups.Tuple.tuple;
+
+import com.marvinformatics.shard4j.protocol.Outcome;
+import com.marvinformatics.shard4j.protocol.Pass;
+import com.marvinformatics.shard4j.protocol.SessionView;
+import com.marvinformatics.shard4j.protocol.TestState;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.platform.engine.TestExecutionResult;
+import org.testcontainers.containers.GenericContainer;
+
+/**
+ * The headline acceptance run: plain, parameterized, disabled, in-body abort and
+ * {@code @BeforeAll} abort fixtures across three simulated shards against a real
+ * coordinator container -- census registered, units claimed and executed, results
+ * reported, barrier honoured, and the coverage verdict satisfiable from the read surface.
+ */
+@Tag("shard4j-harness")
+class CoordinatedShardingE2EIT {
+
+  private static final List<Class<?>> SUITE =
+      List.of(
+          PingResourceIT.class,
+          InventoryAuditIT.class,
+          CheckoutSetupIT.class,
+          FlakyGatewayIT.class,
+          CatalogSearchIT.class);
+
+  private static GenericContainer<?> coordinator;
+  private static String url;
+
+  @BeforeAll
+  static void start() {
+    coordinator = ShardingHarness.startCoordinator();
+    url = ShardingHarness.urlOf(coordinator);
+  }
+
+  @AfterAll
+  static void stop() {
+    coordinator.stop();
+  }
+
+  @Test
+  void givenThreeShardsAndThreePasses_whenTheSuiteRuns_thenEveryUnitReachesOneTerminalNonFailingState()
+      throws Exception {
+    String sessionId = UUID.randomUUID().toString();
+    ExecutorService shards = Executors.newFixedThreadPool(3);
+    try {
+      List<Future<List<ShardingHarness.ShardRun>>> futures =
+          List.of(
+              shards.submit(() -> runAllPasses(sessionId, 0)),
+              shards.submit(() -> runAllPasses(sessionId, 1)),
+              shards.submit(() -> runAllPasses(sessionId, 2)));
+      for (Future<List<ShardingHarness.ShardRun>> future : futures) {
+        for (ShardingHarness.ShardRun run : future.get(5, TimeUnit.MINUTES)) {
+          assertThat(run.engineResult().getStatus())
+              .as("no shard may fail at the engine level")
+              .isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
+        }
+      }
+    } finally {
+      shards.shutdownNow();
+    }
+
+    SessionView view = ShardingHarness.viewOf(coordinator, sessionId);
+    assertThat(view.registeredCount()).isEqualTo(9);
+    assertThat(view.tests())
+        .allSatisfy(
+            test ->
+                assertThat(test.state())
+                    .as("unit %s must reach a terminal non-failing state", test.testId())
+                    .isIn(TestState.PASSED, TestState.SKIPPED, TestState.ABORTED));
+
+    // The disabled leaf is indistinguishable at discovery, so it is in the census and
+    // reports SKIPPED with its reason.
+    SessionView.TestView disabled = unit(view, "reconcilesLedger()");
+    assertThat(disabled.state()).isEqualTo(TestState.SKIPPED);
+    assertThat(disabled.reason()).contains("ledger reconciliation");
+
+    // Abort shape 1: the class container aborted in @BeforeAll and emitted nothing for
+    // its leaves; both must still be explained, with the container's reason.
+    for (String checkout : List.of("authorisesCard()", "capturesFunds()")) {
+      SessionView.TestView aborted = unit(view, checkout);
+      assertThat(aborted.state()).isEqualTo(TestState.ABORTED);
+      assertThat(aborted.reason()).contains("payment sandbox");
+    }
+
+    // Abort shape 2: the leaf started and then aborted in its body.
+    SessionView.TestView inBody = unit(view, "needsLocalWarehouse()");
+    assertThat(inBody.state()).isEqualTo(TestState.ABORTED);
+    assertThat(inBody.reason()).contains("warehouse service");
+
+    // The failure was re-handed through the barrier and passed on a retry pass.
+    SessionView.TestView flaky = unit(view, "retriesAgainstTheGateway()");
+    assertThat(flaky.state()).isEqualTo(TestState.PASSED);
+    assertThat(flaky.records())
+        .extracting(SessionView.RecordView::pass, SessionView.RecordView::outcome)
+        .containsExactly(tuple(Pass.MAIN, Outcome.FAILED), tuple(Pass.RETRY1, Outcome.PASSED));
+
+    // The parameterized method leased and reported as one unit.
+    SessionView.TestView template = unit(view, "findsProducts(java.lang.String)");
+    assertThat(template.testId()).contains("[test-template:");
+    assertThat(template.state()).isEqualTo(TestState.PASSED);
+  }
+
+  @Test
+  void givenAReleasedShard_whenALaterPassRuns_thenItCostsOnlyDiscoveryAndExecutesNothing() {
+    String sessionId = UUID.randomUUID().toString();
+    List<Class<?>> suite = List.of(PingResourceIT.class, CatalogSearchIT.class);
+    ShardingHarness.ShardRun main = ShardingHarness.runShard(url, sessionId, 0, "main", suite);
+    assertThat(main.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
+    assertThat(main.startedTests()).isNotEmpty();
+
+    ShardingHarness.ShardRun retry = ShardingHarness.runShard(url, sessionId, 0, "retry1", suite);
+
+    assertThat(retry.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
+    assertThat(retry.startedTests())
+        .as("an empty-claim pass must execute nothing at all")
+        .isEmpty();
+    SessionView view = ShardingHarness.viewOf(coordinator, sessionId);
+    assertThat(view.tests())
+        .allSatisfy(test -> assertThat(test.records()).hasSize(1));
+  }
+
+  @Test
+  void givenADivergentCensusOnRejoin_whenRegistering_thenTheShardFailsLoudlyNamingTheIds() {
+    String sessionId = UUID.randomUUID().toString();
+    ShardingHarness.ShardRun first =
+        ShardingHarness.runShard(
+            url, sessionId, 0, "main", List.of(PingResourceIT.class, CatalogSearchIT.class));
+    assertThat(first.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
+
+    // A second shard whose discovery produced a different set: the coordinator refuses
+    // and the engine surfaces the refusal as an engine-level failure naming the ids.
+    ShardingHarness.ShardRun divergent =
+        ShardingHarness.runShard(url, sessionId, 1, "main", List.of(PingResourceIT.class));
+
+    assertThat(divergent.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.FAILED);
+    assertThat(divergent.engineResult().getThrowable().orElseThrow().getMessage())
+        .contains("mismatch")
+        .contains("findsProducts");
+  }
+
+  private static List<ShardingHarness.ShardRun> runAllPasses(String sessionId, int shard) {
+    return List.of(
+        ShardingHarness.runShard(url, sessionId, shard, "main", SUITE),
+        ShardingHarness.runShard(url, sessionId, shard, "retry1", SUITE),
+        ShardingHarness.runShard(url, sessionId, shard, "retry2", SUITE));
+  }
+
+  private static SessionView.TestView unit(SessionView view, String methodSuffix) {
+    return view.tests().stream()
+        .filter(test -> test.testId().endsWith(":" + methodSuffix + "]"))
+        .findFirst()
+        .orElseThrow(
+            () -> new AssertionError("no census unit ends with " + methodSuffix));
+  }
+
+}

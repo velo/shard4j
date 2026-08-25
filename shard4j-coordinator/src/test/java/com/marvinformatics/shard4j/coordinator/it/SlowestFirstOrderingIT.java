@@ -78,7 +78,7 @@ class SlowestFirstOrderingIT {
     List<String> census = List.of(FAST, MID, NEW_A, SLOW, NEW_B);
     String sessionId = UUID.randomUUID().toString();
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census));
 
     ClaimResponse response =
         client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, CLASS_NAME, census));

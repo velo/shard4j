@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -101,7 +102,6 @@ public final class CoordinatorCore {
                 request.attempt(),
                 1,
                 request.metadata(),
-                request.testSetHash(),
                 request.tests(),
                 now));
         session =
@@ -110,7 +110,6 @@ public final class CoordinatorCore {
                 request.attempt(),
                 1,
                 request.metadata(),
-                request.testSetHash(),
                 request.tests(),
                 now);
         sessions.put(sessionId, session);
@@ -120,9 +119,7 @@ public final class CoordinatorCore {
             session.registeredCount(),
             request.attempt());
       } else {
-        if (!session.testSetHash().equals(request.testSetHash())) {
-          throw new RegistrationMismatchException(session.testSetHash(), request.testSetHash());
-        }
+        requireMatchingCensus(session, request.tests());
         if (request.attempt() > session.attempt()) {
           long newEpoch = session.epoch() + 1;
           sessionLog.append(
@@ -132,7 +129,6 @@ public final class CoordinatorCore {
                   request.attempt(),
                   newEpoch,
                   request.metadata(),
-                  request.testSetHash(),
                   request.tests(),
                   now));
           session.bumpEpoch(request.attempt(), newEpoch);
@@ -404,19 +400,18 @@ public final class CoordinatorCore {
               record.attempt(),
               record.epoch(),
               record.metadata(),
-              record.testSetHash(),
               record.tests(),
               record.ts()));
       return;
     }
     // The live path rejects a conflicting census before it is ever appended, so two
-    // REGISTERED records for one session with different hashes mean the log is
+    // REGISTERED records for one session with different test sets mean the log is
     // contradictory; folding them silently would replay completions into the wrong census.
-    if (!session.testSetHash().equals(record.testSetHash())) {
+    if (!session.censusIds().equals(new HashSet<>(record.tests()))) {
       throw new IllegalStateException(
           "Refusing replay: session "
               + record.session()
-              + " has REGISTERED records with conflicting testSetHash values; repair the"
+              + " has REGISTERED records with conflicting test sets; repair the"
               + " session log before starting");
     }
     if (record.attempt() > session.attempt()) {
@@ -577,9 +572,6 @@ public final class CoordinatorCore {
     if (request.attempt() < 1) {
       throw new ProtocolViolationException("attempt must be a positive integer");
     }
-    if (request.testSetHash() == null || request.testSetHash().isBlank()) {
-      throw new ProtocolViolationException("testSetHash is required");
-    }
     if (request.tests() == null || request.tests().isEmpty()) {
       throw new ProtocolViolationException(
           "A census must enumerate at least one lease unit; an empty enumeration is the"
@@ -606,6 +598,23 @@ public final class CoordinatorCore {
     }
   }
 
+  /**
+   * Registration carries the whole census, so the comparison is over sets directly and a
+   * mismatch names exactly which ids diverged -- no digest, so no separator, collation or
+   * charset for the two sides to agree on.
+   */
+  private static void requireMatchingCensus(Session session, List<String> offeredTests) {
+    Set<String> stored = session.censusIds();
+    Set<String> offered = new LinkedHashSet<>(offeredTests);
+    if (stored.equals(offered)) {
+      return;
+    }
+    List<String> onlyStored = stored.stream().filter(id -> !offered.contains(id)).sorted().toList();
+    List<String> onlyOffered =
+        offered.stream().filter(id -> !stored.contains(id)).sorted().toList();
+    throw new RegistrationMismatchException(onlyStored, onlyOffered);
+  }
+
   private static void validateResult(ResultRequest request) {
     if (request.durationMs() < 0) {
       throw new ProtocolViolationException("durationMs must not be negative");
@@ -618,13 +627,19 @@ public final class CoordinatorCore {
               + " net that keeps admitted non-passes honest");
     }
     if (request.outcome() == Outcome.PASSED && request.invocations() != null) {
+      // SKIPPED rows are the one admissible mix: a per-invocation disabling condition
+      // skipping a row of an otherwise-passing template still means the unit ran and
+      // passed everything it ran. FAILED or ABORTED rows contradict the aggregate.
       boolean inconsistent =
           request.invocations().stream()
-              .anyMatch(invocation -> invocation.outcome() != Outcome.PASSED);
+              .anyMatch(
+                  invocation ->
+                      invocation.outcome() == Outcome.FAILED
+                          || invocation.outcome() == Outcome.ABORTED);
       if (inconsistent) {
         throw new ProtocolViolationException(
-            "A PASSED unit cannot carry a non-PASSED invocation; the aggregate must be"
-                + " consistent with what it aggregates");
+            "A PASSED unit cannot carry a FAILED or ABORTED invocation; the aggregate must"
+                + " be consistent with what it aggregates");
       }
     }
   }

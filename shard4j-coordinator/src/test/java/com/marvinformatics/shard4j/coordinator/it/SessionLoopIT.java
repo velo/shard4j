@@ -69,7 +69,6 @@ class SessionLoopIT {
         shard,
         attempt,
         Map.of("ci", "example-ci", "run", "42"),
-        CoordinatorClient.hashOf(census()),
         census());
   }
 
@@ -244,17 +243,22 @@ class SessionLoopIT {
   }
 
   @Test
-  void givenARegisteredSession_whenCensusHashDiverges_thenConflictThatScreams() {
+  void givenARegisteredSession_whenCensusDiverges_thenConflictNamesTheDifferingIds() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
 
-    List<String> divergent = List.of(Ids.method(ALPHA, "first"));
+    String neverRegistered = Ids.method(ALPHA, "phantom");
+    List<String> divergent = List.of(Ids.method(ALPHA, "first"), neverRegistered);
     CoordinatorClient.RawResponse response =
-        client.registerRaw(
-            sessionId,
-            new RegisterRequest(1, 1, Map.of(), CoordinatorClient.hashOf(divergent), divergent));
+        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent));
     assertThat(response.status()).isEqualTo(409);
-    assertThat(response.body()).contains("hash");
+    assertThat(response.body())
+        .contains(neverRegistered)
+        .contains(Ids.method(ALPHA, "second"))
+        .contains(Ids.template(BETA, "rows(java.lang.String)"))
+        .contains(Ids.method(GAMMA, "disabledUpstream"))
+        .contains(Ids.method(GAMMA, "needsLocalService"))
+        .doesNotContain(Ids.method(ALPHA, "first"));
   }
 
   @Test
@@ -265,13 +269,13 @@ class SessionLoopIT {
         client.registerRaw(
             sessionId,
             new RegisterRequest(
-                0, 1, Map.of(), CoordinatorClient.hashOf(List.of(invocationId)), List.of(invocationId)));
+                0, 1, Map.of(), List.of(invocationId)));
     assertThat(invocationInCensus.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse emptyCensus =
         client.registerRaw(
             sessionId,
-            new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(List.of()), List.of()));
+            new RegisterRequest(0, 1, Map.of(), List.of()));
     assertThat(emptyCensus.status()).isEqualTo(400);
 
     client.register(sessionId, registration(0, 1));
@@ -303,6 +307,42 @@ class SessionLoopIT {
         sessionId,
         new ResultRequest(0, Pass.MAIN, skipped, fence, Outcome.SKIPPED, 1, false, "disabled", null));
     assertThat(client.stateOf(sessionId, skipped)).isEqualTo(TestState.SKIPPED);
+  }
+
+  /**
+   * The one admissible mixed aggregate: a per-invocation disabling condition skipping a
+   * row of an otherwise-passing template still means the unit ran and passed everything
+   * it ran. Rejecting it would 400 a healthy shard mid-listener and strand its other
+   * leases; FAILED and ABORTED rows under PASSED stay rejected above.
+   */
+  @Test
+  void givenASkippedRowUnderAPassingTemplate_whenReported_thenAcceptedAsPassed() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, registration(0, 1));
+    String templateId = Ids.template(BETA, "rows(java.lang.String)");
+    Fence fence = client.claimOne(sessionId, 0, templateId);
+
+    client.result(
+        sessionId,
+        new ResultRequest(
+            0,
+            Pass.MAIN,
+            templateId,
+            fence,
+            Outcome.PASSED,
+            7_000,
+            false,
+            null,
+            List.of(
+                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null),
+                new InvocationRecord(
+                    Ids.invocation(templateId, 2),
+                    Outcome.SKIPPED,
+                    0,
+                    "row disabled in this environment"),
+                new InvocationRecord(Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null))));
+
+    assertThat(client.stateOf(sessionId, templateId)).isEqualTo(TestState.PASSED);
   }
 
   @Test

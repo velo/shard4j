@@ -14,7 +14,7 @@ class CoverageVerdictTest {
   private static SessionView view(
       List<SessionView.TestView> tests, List<SessionView.ShardView> shards) {
     return new SessionView(
-        "7f3a", 1, 1, Map.of(), tests.size(), "hash", shards, tests, List.of(), List.of(), 0, 0);
+        "7f3a", 1, 1, Map.of(), tests.size(), shards, tests, List.of(), List.of(), 0, 0);
   }
 
   private static SessionView.TestView test(String id, TestState state) {
