@@ -30,9 +30,11 @@ final class DailyJsonl implements AutoCloseable {
     LocalDate today = LocalDate.now(ZoneOffset.UTC);
     if (channel == null || !today.equals(openDate)) {
       close();
+      Path file = dir.resolve(today + ".jsonl");
+      sealTornTail(file);
       channel =
           FileChannel.open(
-              dir.resolve(today + ".jsonl"),
+              file,
               StandardOpenOption.CREATE,
               StandardOpenOption.WRITE,
               StandardOpenOption.APPEND);
@@ -42,6 +44,31 @@ final class DailyJsonl implements AutoCloseable {
     buffer.put(jsonLine).put((byte) '\n').flip();
     channel.write(buffer);
     channel.force(false);
+  }
+
+  /**
+   * A crash mid-append leaves a partial line with no trailing newline. Reopened in APPEND
+   * mode, the next record would be glued onto that fragment and a later replay would drop
+   * both as one unparseable line -- so the fragment is sealed with a newline before any new
+   * record is written after it.
+   */
+  private static void sealTornTail(Path file) throws IOException {
+    if (!Files.exists(file)) {
+      return;
+    }
+    try (FileChannel tail =
+        FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+      long size = tail.size();
+      if (size == 0) {
+        return;
+      }
+      ByteBuffer lastByte = ByteBuffer.allocate(1);
+      tail.read(lastByte, size - 1);
+      if (lastByte.get(0) != '\n') {
+        tail.write(ByteBuffer.wrap(new byte[] {'\n'}), size);
+        tail.force(false);
+      }
+    }
   }
 
   /** Day files whose date falls inside the window, oldest first. */

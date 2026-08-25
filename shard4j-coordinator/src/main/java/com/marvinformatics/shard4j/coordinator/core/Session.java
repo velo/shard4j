@@ -104,10 +104,17 @@ final class Session {
     unit.state = TestState.LEASED;
   }
 
-  /** Expiry is the backstop for a genuinely silent death; the unit returns to its pool. */
+  /**
+   * Expiry is the backstop for a genuinely silent death; the unit returns to its pool. The
+   * holder is treated as departed at the same moment -- a shard that stops reporting can
+   * never announce departure itself, and without this the roster keeps a ghost alive and a
+   * stranded session can never be diagnosed as INCOMPLETE. A holder that was merely slow
+   * rejoins on its next claim.
+   */
   void releaseExpiredLeases(Instant now) {
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.LEASED && !unit.lease.expiresAt().isAfter(now)) {
+        shards.computeIfAbsent(unit.lease.shard(), index -> new ShardInfo()).departed = true;
         restore(unit);
       }
     }

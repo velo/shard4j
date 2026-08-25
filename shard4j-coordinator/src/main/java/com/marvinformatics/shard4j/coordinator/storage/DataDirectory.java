@@ -125,6 +125,12 @@ public final class DataDirectory implements AutoCloseable {
       channel.force(true);
     }
     Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+    // The rename is only durable once the directory entry itself is fsynced; without this a
+    // power loss can resurrect the previous incarnation and let an old zombie's fences
+    // compare valid.
+    try (FileChannel dirChannel = FileChannel.open(root, StandardOpenOption.READ)) {
+      dirChannel.force(true);
+    }
     return next;
   }
 
