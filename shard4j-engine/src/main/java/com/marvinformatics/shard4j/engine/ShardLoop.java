@@ -70,8 +70,7 @@ final class ShardLoop {
    */
   private final Set<String> classesInFlight = new HashSet<>();
 
-  /** One slot's failure stops the others from pulling new classes; they finish what they hold. */
-  private final AtomicBoolean stopPulling = new AtomicBoolean();
+  private final SlotScheduler scheduler = new SlotScheduler();
 
   void run(DiscoveredCensus census) {
     gateway.register();
@@ -134,140 +133,125 @@ final class ShardLoop {
   }
 
   /**
-   * Pulls until the coordinator answers the open ask with nothing -- the terminal state
-   * for this shard. One slot runs the pull loop inline; more run it on named worker
-   * threads, joined before the pass epilogue so reconciliation and the barrier always see
-   * every slot finished. The first slot failure surfaces with the rest suppressed, and
-   * the shared failure path then NACKs whatever any slot still holds.
+   * Runs the pull loop on {@code shard.concurrency} slots and surfaces the first slot
+   * failure; the shared failure path then NACKs whatever any slot still holds.
    */
   private void claimAndRunUntilDrained(DiscoveredCensus census) {
-    int slots = configuration.concurrency();
-    if (slots == 1) {
-      pullUntilDrained(census, new AtomicBoolean(true));
-      return;
+    List<Runnable> slotLoops = new ArrayList<>();
+    for (int slot = 0; slot < configuration.concurrency(); slot++) {
+      Slot drainSlot = new Slot();
+      slotLoops.add(() -> drainSlot.pullUntilDrained(census));
     }
-    List<Thread> workers = new ArrayList<>();
-    List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
-    for (int slot = 0; slot < slots; slot++) {
-      // Cold-start exclusion is per slot, not per shard: on a cold JVM every slot's first
-      // unit pays the JIT and classloading bill at the same moment, and an unflagged one
-      // would record that bill into the duration history driving slowest-first.
-      AtomicBoolean slotFirstResultPending = new AtomicBoolean(true);
-      Thread worker =
-          new Thread(
-              () -> {
-                try {
-                  pullUntilDrained(census, slotFirstResultPending);
-                } catch (RuntimeException | Error e) {
-                  stopPulling.set(true);
-                  failures.add(e);
-                }
-              },
-              "shard4j-slot-" + slot);
-      worker.start();
-      workers.add(worker);
-    }
-    joinAll(workers, failures);
-    if (!failures.isEmpty()) {
-      Throwable first = failures.get(0);
-      // Identity-guarded: both slots can surface the same Throwable instance -- the JVM's
-      // preallocated OutOfMemoryError -- and self-suppression would mask it entirely.
-      failures.stream().skip(1).filter(failure -> failure != first).forEach(first::addSuppressed);
-      if (first instanceof RuntimeException runtime) {
-        throw runtime;
-      }
-      throw (Error) first;
-    }
+    scheduler.runToCompletion(slotLoops);
   }
 
   /**
-   * Waits for every slot to finish. An interrupt here must not walk away from live slots:
-   * they would keep claiming new classes on non-daemon threads after the engine call
-   * already failed, and keep reporting units the shared failure path is about to NACK --
-   * so the pulling is stopped, the slots are interrupted out of whatever they hold, and
-   * the wait resumes until every slot is actually gone.
+   * One drain slot: the pull loop plus the slot-local state it needs. Cold-start
+   * exclusion is per slot, not per shard: on a cold JVM every slot's first unit pays the
+   * JIT and classloading bill at the same moment, and an unflagged one would record that
+   * bill into the duration history driving slowest-first.
    */
-  private void joinAll(List<Thread> workers, List<Throwable> failures) {
-    boolean interrupted = false;
-    for (int i = 0; i < workers.size(); i++) {
-      try {
-        workers.get(i).join();
-      } catch (InterruptedException e) {
-        interrupted = true;
-        stopPulling.set(true);
-        workers.forEach(Thread::interrupt);
-        i--;
-      }
-    }
-    if (interrupted) {
-      Thread.currentThread().interrupt();
-      failures.add(0, new ShardExecutionException("Interrupted while waiting for a drain slot"));
-    }
-  }
+  private final class Slot {
 
-  /**
-   * One slot's pull loop. Each ask hands back the class the coordinator wants run next,
-   * chosen by its own schedule with the first batch of leases attached; the slot drains
-   * that class before running it, and the whole ask-and-drain is one critical section
-   * across slots -- so a concurrent ask ranks a pool with the named class fully leased
-   * and receives the next-slowest remaining class, not an adjacent slice of this one. A
-   * class the coordinator never names is never entered at all: no nested discovery, no
-   * {@code @BeforeAll}, no class initialiser.
-   */
-  private void pullUntilDrained(DiscoveredCensus census, AtomicBoolean firstResultPending) {
-    while (!stopPulling.get()) {
-      String className;
-      List<Grant> drained;
-      synchronized (dispatchLock) {
-        NextClassResponse next = gateway.nextClass();
-        if (next.granted().isEmpty()) {
-          return;
+    private final AtomicBoolean firstResultPending = new AtomicBoolean(true);
+
+    /**
+     * The slot's pull loop, until the coordinator answers the open ask with nothing --
+     * the terminal state for this shard. Each ask hands back the class the coordinator
+     * wants run next, chosen by its own schedule with the first batch of leases attached;
+     * the slot drains that class before running it, and the whole ask-and-drain is one
+     * critical section across slots -- so a concurrent ask ranks a pool with the named
+     * class fully leased and receives the next-slowest remaining class, not an adjacent
+     * slice of this one. A class the coordinator never names is never entered at all: no
+     * nested discovery, no {@code @BeforeAll}, no class initialiser.
+     */
+    void pullUntilDrained(DiscoveredCensus census) {
+      while (!scheduler.pullingStopped()) {
+        String className;
+        List<Grant> drained;
+        synchronized (dispatchLock) {
+          NextClassResponse next = gateway.nextClass();
+          if (next.granted().isEmpty()) {
+            return;
+          }
+          // Tracked before the census is consulted: an unknown class name is a
+          // coordinator bug, and its grants are NACKed on the way out rather than left
+          // to the TTL.
+          ledger.track(next.granted());
+          className = next.className();
+          drained = new ArrayList<>(next.granted());
+          drained.addAll(drainClass(census.classNamed(className)));
         }
-        // Tracked before the census is consulted: an unknown class name is a coordinator
-        // bug, and its grants are NACKed on the way out rather than left to the TTL.
-        ledger.track(next.granted());
-        className = next.className();
-        drained = new ArrayList<>(next.granted());
-        drained.addAll(drainClass(census.classNamed(className)));
+        runExclusively(className, drained);
       }
-      runExclusively(className, drained, firstResultPending);
     }
-  }
 
-  /**
-   * Holds the one-live-instance-per-class rule across slots: entered only once no other
-   * slot is running the same class. Waiting happens outside the dispatch lock, so a
-   * blocked slot never stalls the other slot's asks.
-   *
-   * <p>A parked batch is fully leased and nothing refreshes a lease: {@code expiresAt} is
-   * fixed at grant, and the keepalive is proof of life for the shard, never a lease
-   * extension -- so a parked batch's lease clock runs for the sibling's whole drain plus
-   * its own. That is deliberately a sizing rule on the coordinator's {@code leaseTtl}
-   * (documented there and in the README) rather than an engine-side refresh: the wire has
-   * no refresh call, and adding one would let a wedged slot extend its hold indefinitely,
-   * which the TTL exists to bound.
-   */
-  private void runExclusively(
-      String className, List<Grant> grants, AtomicBoolean firstResultPending) {
-    synchronized (classesInFlight) {
-      while (classesInFlight.contains(className)) {
-        try {
-          classesInFlight.wait();
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new ShardExecutionException(
-              "Interrupted while waiting to enter " + className);
-        }
-      }
-      classesInFlight.add(className);
-    }
-    try {
-      runBatch(className, grants, firstResultPending);
-    } finally {
+    /**
+     * Holds the one-live-instance-per-class rule across slots: entered only once no other
+     * slot is running the same class. Waiting happens outside the dispatch lock, so a
+     * blocked slot never stalls the other slot's asks.
+     *
+     * <p>A parked batch is fully leased and nothing refreshes a lease: {@code expiresAt}
+     * is fixed at grant, and the keepalive is proof of life for the shard, never a lease
+     * extension -- so a parked batch's lease clock runs for the sibling's whole drain
+     * plus its own. That is deliberately a sizing rule on the coordinator's
+     * {@code leaseTtl} (documented there and in the README) rather than an engine-side
+     * refresh: the wire has no refresh call, and adding one would let a wedged slot
+     * extend its hold indefinitely, which the TTL exists to bound.
+     */
+    private void runExclusively(String className, List<Grant> grants) {
       synchronized (classesInFlight) {
-        classesInFlight.remove(className);
-        classesInFlight.notifyAll();
+        while (classesInFlight.contains(className)) {
+          try {
+            classesInFlight.wait();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ShardExecutionException(
+                "Interrupted while waiting to enter " + className);
+          }
+        }
+        classesInFlight.add(className);
       }
+      try {
+        runBatch(className, grants);
+      } finally {
+        synchronized (classesInFlight) {
+          classesInFlight.remove(className);
+          classesInFlight.notifyAll();
+        }
+      }
+    }
+
+    private void runBatch(String className, List<Grant> grants) {
+      Map<String, Grant> byUnit = new LinkedHashMap<>();
+      grants.forEach(grant -> byUnit.put(grant.testId(), grant));
+      // Order is the coordinator's schedule end to end: it chose this class over every
+      // other on the open ask, and within the class the grants arrived slowest-first.
+      // The nested discovery receives that order intact rather than re-shuffled by a
+      // hash-ordered set.
+      List<ExecutionId> leased =
+          byUnit.keySet().stream().map(unitId -> classRootedLease(className, unitId)).toList();
+      TestDescriptor batch =
+          jupiter.discoverIds(
+              leased,
+              request.getConfigurationParameters(),
+              request.getOutputDirectoryCreator());
+      UnitOutcomeListener listener =
+          new UnitOutcomeListener(
+              request.getEngineExecutionListener(),
+              jupiter.nestedRootId(),
+              false,
+              Set.copyOf(leased),
+              result -> reportCompleted(byUnit, result));
+      jupiter.execute(batch, request, listener);
+    }
+
+    private void reportCompleted(Map<String, Grant> byUnit, UnitResult result) {
+      Grant grant = byUnit.get(result.unitId().value());
+      boolean firstOnShard = firstResultPending.getAndSet(false);
+      gateway.report(grant.fence(), result, firstOnShard);
+      ledger.explain(result.unitId().value(), grant.fence());
+      outcomes.put(result.unitId().value(), result.outcome());
     }
   }
 
@@ -291,31 +275,6 @@ final class ShardLoop {
     }
   }
 
-  private void runBatch(
-      String className, List<Grant> grants, AtomicBoolean firstResultPending) {
-    Map<String, Grant> byUnit = new LinkedHashMap<>();
-    grants.forEach(grant -> byUnit.put(grant.testId(), grant));
-    // Order is the coordinator's schedule end to end: it chose this class over every
-    // other on the open ask, and within the class the grants arrived slowest-first. The
-    // nested discovery receives that order intact rather than re-shuffled by a
-    // hash-ordered set.
-    List<ExecutionId> leased =
-        byUnit.keySet().stream().map(unitId -> classRootedLease(className, unitId)).toList();
-    TestDescriptor batch =
-        jupiter.discoverIds(
-            leased,
-            request.getConfigurationParameters(),
-            request.getOutputDirectoryCreator());
-    UnitOutcomeListener listener =
-        new UnitOutcomeListener(
-            request.getEngineExecutionListener(),
-            jupiter.nestedRootId(),
-            false,
-            Set.copyOf(leased),
-            result -> reportCompleted(byUnit, firstResultPending, result));
-    jupiter.execute(batch, request, listener);
-  }
-
   /**
    * The grant-side half of the wire-id contract the census enforces on the way out: a
    * granted unit the nested discovery could never resolve would be dropped in silence and
@@ -336,15 +295,6 @@ final class ShardLoop {
               + unitId);
     }
     return new ExecutionId(unitId);
-  }
-
-  private void reportCompleted(
-      Map<String, Grant> byUnit, AtomicBoolean firstResultPending, UnitResult result) {
-    Grant grant = byUnit.get(result.unitId().value());
-    boolean firstOnShard = firstResultPending.getAndSet(false);
-    gateway.report(grant.fence(), result, firstOnShard);
-    ledger.explain(result.unitId().value(), grant.fence());
-    outcomes.put(result.unitId().value(), result.outcome());
   }
 
   /**
