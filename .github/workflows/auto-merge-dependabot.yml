@@ -41,9 +41,22 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The github_actions ecosystem is deliberately not auto-merged. Those updates edit
+      # files under .github/workflows/, and GITHUB_TOKEN is refused on any such merge --
+      # "refusing to allow a GitHub App to create or update workflow ... without
+      # `workflows` permission". That scope exists only on a PAT, and this repository does
+      # not use one (see the GHCR push in build.yml, which says the same thing). So these
+      # PRs are approved and left for a human, rather than failing this job every time.
+      #
       # Squash, to match the single-line history this repository keeps.
       - name: Enable auto-merge
+        if: steps.metadata.outputs.package-ecosystem != 'github_actions'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Explain why a workflow update was left open
+        if: steps.metadata.outputs.package-ecosystem == 'github_actions'
+        run: |
+          echo "Approved, not queued. Merging a workflow-file change needs a PAT scope this repository does not use, so this one wants a human." >> "$GITHUB_STEP_SUMMARY"
