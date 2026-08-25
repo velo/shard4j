@@ -130,6 +130,13 @@ coordinator must be tested as a real running server in Docker.
 
 ## Conventions
 
+- Lombok (`provided` scope, so it never enters a shipped dependency tree) supplies
+  constructors (`@RequiredArgsConstructor`), builders (`@Builder`), loggers (`@Slf4j`),
+  fluent accessors (`@Getter` with `@Accessors(fluent = true)`) and static-only classes
+  (`@UtilityClass`) where they replace pure boilerplate. A constructor that validates,
+  normalises or derives state stays hand-written.
+- Test methods -- unit and integration alike -- are named `given_when_then`, camelCase
+  inside each clause: `givenTornTail_whenAppendingAfterReopen_thenNewRecordSurvivesReplay`.
 - Files end with a newline. No trailing whitespace on blank lines.
 - Comments explain *why*, not what the next line does.
 - Use imports; never a fully-qualified class name in code.

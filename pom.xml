@@ -56,6 +56,7 @@
          baseline is 17 rather than something newer. -->
     <junit.bom.version>5.13.4</junit.bom.version>
     <feign.version>13.14</feign.version>
+    <lombok.version>1.18.46</lombok.version>
     <jackson.version>2.22.2</jackson.version>
     <spring-boot.version>4.1.1</spring-boot.version>
 
@@ -92,6 +93,9 @@
           <configuration>
             <showDeprecation>true</showDeprecation>
             <showWarnings>true</showWarnings>
+            <!-- Spring resolves @PathVariable names reflectively; without -parameters
+                 every handler method needs the name repeated by hand. -->
+            <parameters>true</parameters>
           </configuration>
         </plugin>
         <plugin>
