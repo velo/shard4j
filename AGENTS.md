@@ -114,7 +114,7 @@ is genuinely impossible -- never for convenience.
 server nor a mock. That is the exception its nature earns, not the pattern to copy: the
 coordinator must be tested as a real running server in Docker.
 
-## Repository hygiene -- enforced in CI
+## Repository hygiene
 
 - **No secrets, ever.** Values arrive only through `COORDINATOR_SECRETS` and
   `SHARD_COORDINATOR_SECRET`. No example value that could be mistaken for a real one.
@@ -122,9 +122,11 @@ coordinator must be tested as a real running server in Docker.
   `docker-compose.yml` for local development would be in scope; anything naming a
   *destination* is not.
 - **No hostnames, registries, account ids, cluster names, namespaces or organisation names**
-  in code, tests, fixtures or comments. `scripts/check-hygiene.sh` greps the tree for these
-  and fails the `build` job. The single allow-listed file is the script itself, which has
-  to contain the patterns it looks for.
+  in code, tests, fixtures or comments. shard4j is a product; the projects that run it are
+  consumers, and nothing identifying any of them belongs here. There is deliberately no
+  in-repo check for this: a script that greps for such strings has to contain them, which
+  is itself the leak. Enforce the rule in review, or with a private pre-commit hook in your
+  own clone's `.git/hooks/` -- hooks are untracked and ship nowhere.
 - Example tenants are `example/orders-service` and friends; example packages are
   `com.example.*`.
 

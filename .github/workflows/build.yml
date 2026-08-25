@@ -28,9 +28,6 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Hygiene gate
-        run: ./scripts/check-hygiene.sh
-
       # Also runs the enforced module boundary: the engine may resolve no coordinator
       # artifact and no Spring artifact, and shard4j-protocol's runtime tree must be empty.
       - name: Build reactor
