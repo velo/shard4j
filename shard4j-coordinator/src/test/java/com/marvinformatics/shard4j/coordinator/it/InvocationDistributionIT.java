@@ -149,6 +149,27 @@ class InvocationDistributionIT {
   }
 
   @Test
+  void givenDeclaredShardsThatNeverArrive_whenTheLiveShardsAsk_thenTheLastAskerTakesTheRemainder() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(TEMPLATE), 4));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), List.of(TEMPLATE), 4));
+
+    // Fair share of five claimable units over the declared fleet of four is two: shard 0
+    // leaves room for the shards still booting while shard 1 can still come back.
+    NextClassResponse first = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    assertThat(first.granted()).hasSize(2);
+    // Shard 0's share is taken while shard 1 still works; its open ask comes back empty
+    // and it stops pulling for the pass.
+    assertThat(client.next(sessionId, new NextClassRequest(0, Pass.MAIN)).granted()).isEmpty();
+
+    // Shard 1 is now the last live asker. The two declared shards never registered --
+    // dead before boot -- and must not hold anything back: capping here would leave
+    // three units PENDING forever, an INCOMPLETE verdict where main would have passed.
+    NextClassResponse second = client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+    assertThat(second.granted()).hasSize(3);
+  }
+
+  @Test
   void givenOneFailedInvocation_whenTheRetryPassRuns_thenOnlyThatPositionRetriesOnAnyShard() {
     String sessionId = UUID.randomUUID().toString();
     registerBoth(sessionId, List.of(TEMPLATE));

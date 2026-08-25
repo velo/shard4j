@@ -19,10 +19,10 @@ import java.util.Map;
  */
 final class FairShare {
 
-  // How long after session creation a declared-but-unseen shard still reserves its fair
-  // share of a template's invocations. Bounded so a shard that never boots costs at most
-  // this much held-back spreading, not a stranded pass: once the window closes, whoever
-  // is still asking takes the remainder.
+  // How long after session creation the declared fleet size still widens share sizing,
+  // so early askers leave room for shards that are booting. It sizes shares only: whether
+  // the cap binds at all is decided by live shards alone, so a declared shard that never
+  // boots can never strand a unit.
   static final Duration FLEET_ARRIVAL_WINDOW = Duration.ofSeconds(60);
 
   private final Map<Integer, Session.ShardInfo> roster;
@@ -55,14 +55,17 @@ final class FairShare {
   /**
    * How many more of the method's invocations this shard may lease right now. The cap is
    * a fair share -- ceil of the pass's eligible invocations over the expected fleet --
-   * and it only binds while some other shard may still ask: another live shard is still
-   * working the pass, or a declared {@code shard.count} shard has not arrived and the
-   * arrival window is open. The last shard still asking is never capped, which is what
-   * makes the hold-back safe: spreading degrades to whole-method behaviour rather than
-   * stranding a unit.
+   * and it binds only while another <em>live</em> shard may still ask: registered, not
+   * departed, not released, not exhausted, and not past the pass. The declared
+   * {@code shard.count} deliberately cannot make the cap bind: a shard that dies before
+   * registration would otherwise hold invocations back forever -- the live shards drain
+   * their shares, exhaust, stop pulling, and the remainder sits PENDING into an
+   * INCOMPLETE verdict. The last live asker is never capped, which is what makes the
+   * hold-back safe: spreading degrades to whole-method behaviour rather than stranding a
+   * unit.
    */
   int invocationAllowance(List<Session.UnitState> units, int shard, Pass pass, Instant now) {
-    if (!othersMayStillClaim(shard, pass, now)) {
+    if (!othersMayStillClaim(shard, pass)) {
       return Integer.MAX_VALUE;
     }
     int eligible = 0;
@@ -102,21 +105,16 @@ final class FairShare {
     return fleet;
   }
 
-  private boolean othersMayStillClaim(int shard, Pass pass, Instant now) {
-    boolean otherStillWorking =
-        roster.entrySet().stream()
-            .anyMatch(
-                entry ->
-                    entry.getKey() != shard
-                        && !entry.getValue().departed
-                        && !entry.getValue().released
-                        && exhausted.get(entry.getKey()) != pass
-                        && (entry.getValue().completedPass == null
-                            || entry.getValue().completedPass.ordinal() < pass.ordinal()));
-    if (otherStillWorking) {
-      return true;
-    }
-    return pass == Pass.MAIN && withinArrivalWindow(now) && declaredShardCount > roster.size();
+  private boolean othersMayStillClaim(int shard, Pass pass) {
+    return roster.entrySet().stream()
+        .anyMatch(
+            entry ->
+                entry.getKey() != shard
+                    && !entry.getValue().departed
+                    && !entry.getValue().released
+                    && exhausted.get(entry.getKey()) != pass
+                    && (entry.getValue().completedPass == null
+                        || entry.getValue().completedPass.ordinal() < pass.ordinal()));
   }
 
   private boolean withinArrivalWindow(Instant now) {

@@ -558,7 +558,7 @@ final class Session {
         : new SessionView.LeaseView(unit.lease.shard(), unit.lease.fence(), unit.lease.expiresAt());
   }
 
-  @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
+  @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
   static final class UnitState {
     final ClaimableUnit unit;
     TestState state = TestState.PENDING;

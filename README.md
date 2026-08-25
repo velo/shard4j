@@ -197,9 +197,12 @@ What it costs and how it stays honest:
   is a value inside the method-keyed window entry. Distribution acts on positions, storage
   never does.
 
-Set `shard.count` so the coordinator can hold a fair share of a method's invocations back
-for shards that have not registered yet; without it, spreading still happens but only
-among the shards that have already asked.
+Set `shard.count` so the coordinator sizes fair shares by the fleet the run launched,
+leaving room for shards still booting; without it, spreading still happens but only among
+the shards that have already asked. The declared count sizes shares, never strands work:
+the cap binds only while another registered, live shard may still ask, so a declared
+shard that dies before registering costs nothing -- the last live asker always takes the
+remainder.
 
 ## Deployment
 
