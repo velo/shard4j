@@ -17,6 +17,8 @@
 
   <properties>
     <forbiddenapis.version>3.10</forbiddenapis.version>
+    <assertj.version>3.27.6</assertj.version>
+    <testcontainers.version>1.21.3</testcontainers.version>
   </properties>
 
   <dependencyManagement>
@@ -68,6 +70,13 @@
       <artifactId>feign-jackson</artifactId>
     </dependency>
 
+    <!-- The wire records carry Instants (lease expiry, barrier hints); without the
+         JSR-310 module Jackson refuses them at runtime, which no compile step catches. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+
     <!-- Already on any failsafe consumer's classpath, so the engine adds nothing
          transitively by taking them at provided scope. -->
     <dependency>
@@ -84,6 +93,18 @@
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
 
@@ -113,6 +134,42 @@
             </path>
           </annotationProcessorPaths>
         </configuration>
+      </plugin>
+
+      <!-- The secret travels through the environment only (the engine refuses it as a
+           property), so the tests must receive it the same way. A local value, meaningless
+           outside this build. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <environmentVariables>
+            <SHARD_COORDINATOR_SECRET>local-unit-test-only</SHARD_COORDINATOR_SECRET>
+          </environmentVariables>
+        </configuration>
+      </plugin>
+
+      <!-- The Docker-hosted integration tests run the engine's client machinery against
+           the real coordinator jar built earlier in this same reactor. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <configuration>
+          <environmentVariables>
+            <SHARD_COORDINATOR_SECRET>local-integration-only</SHARD_COORDINATOR_SECRET>
+          </environmentVariables>
+          <systemPropertyVariables>
+            <coordinator.app.jar>${project.basedir}/../shard4j-coordinator/target/shard4j-coordinator-${project.version}-app.jar</coordinator.app.jar>
+          </systemPropertyVariables>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
 
       <plugin>
@@ -183,6 +240,7 @@
                     <include>com.fasterxml.jackson.core:jackson-databind</include>
                     <include>com.fasterxml.jackson.core:jackson-core</include>
                     <include>com.fasterxml.jackson.core:jackson-annotations</include>
+                    <include>com.fasterxml.jackson.datatype:jackson-datatype-jsr310</include>
                   </includes>
                   <message>shard4j-engine's shipped runtime tree is an allow-list: shard4j-protocol + JUnit Platform + Feign + one JSON codec, and nothing else. Adding to it puts a jar on every consumer's test classpath -- if that is intended, add the coordinate to this rule and say why in the commit.</message>
                 </bannedDependencies>
