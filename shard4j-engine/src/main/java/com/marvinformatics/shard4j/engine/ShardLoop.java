@@ -60,7 +60,15 @@ final class ShardLoop {
   private final Map<String, Outcome> outcomes =
       Collections.synchronizedMap(new LinkedHashMap<>());
 
-  /** Serialises ask-and-drain across slots so each ask sees a fully-leased predecessor. */
+  /**
+   * Serialises ask-and-drain across slots so each ask sees a fully-leased predecessor.
+   *
+   * <p>The two-lock discipline: this lock is held <em>around</em> multiple gateway calls
+   * -- the open ask plus every claim of the drain -- while the gateway's own monitor is
+   * only ever held for the duration of a single call. So keepalives and a sibling slot's
+   * reports still interleave between a drain's claims, and the pair cannot deadlock:
+   * nothing acquires this lock while holding the gateway monitor.
+   */
   private final Object dispatchLock = new Object();
 
   /**

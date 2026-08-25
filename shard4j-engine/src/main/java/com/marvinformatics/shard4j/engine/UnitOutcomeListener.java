@@ -65,6 +65,9 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     this.onUnitComplete = onUnitComplete;
   }
 
+  // Deliberately not synchronized, here and in reportingEntryPublished: both are
+  // stateless pass-throughs touching none of the maps above, and serialising them would
+  // throttle a consumer's parallel nested execution for nothing.
   @Override
   public void dynamicTestRegistered(TestDescriptor descriptor) {
     downstream.dynamicTestRegistered(descriptor);
