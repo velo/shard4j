@@ -1,13 +1,17 @@
 package com.marvinformatics.shard4j.engine;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Runs one pull loop per drain slot and owns the slots' whole lifecycle: the named worker
- * threads, the stop-pulling flag one slot's failure raises for its siblings, the join
+ * threads, the stop-pulling flag one slot's failure raises for its siblings, the wait
  * that outlives an interrupt, and surfacing the first failure with the rest suppressed.
  * The pass epilogue -- reconciliation, the barrier -- always sees every slot finished.
  */
@@ -32,26 +36,36 @@ final class SlotScheduler {
       slotLoops.get(0).run();
       return;
     }
-    List<Thread> workers = new ArrayList<>();
-    List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
-    for (int slot = 0; slot < slotLoops.size(); slot++) {
-      Runnable loop = slotLoops.get(slot);
-      Thread worker =
-          new Thread(
-              () -> {
-                try {
-                  loop.run();
-                } catch (RuntimeException | Error e) {
-                  stopPulling.set(true);
-                  failures.add(e);
-                }
-              },
-              "shard4j-slot-" + slot);
-      worker.start();
-      workers.add(worker);
+    AtomicInteger slotNumber = new AtomicInteger();
+    ExecutorService pool =
+        Executors.newFixedThreadPool(
+            slotLoops.size(),
+            loop -> new Thread(loop, "shard4j-slot-" + slotNumber.getAndIncrement()));
+    try {
+      List<Future<?>> slots =
+          slotLoops.stream()
+              .<Future<?>>map(loop -> pool.submit(stoppingSiblingsOnFailure(loop)))
+              .toList();
+      awaitAll(pool, slots).surfaceFirst();
+    } finally {
+      pool.shutdown();
     }
-    boolean interrupted = joinAll(workers);
-    surfaceFirst(interrupted, failures);
+  }
+
+  /**
+   * The stop must be raised the moment a slot fails, not when its future is inspected:
+   * sibling slots would otherwise keep claiming new classes for the whole remainder of
+   * their own drains.
+   */
+  private Runnable stoppingSiblingsOnFailure(Runnable loop) {
+    return () -> {
+      try {
+        loop.run();
+      } catch (RuntimeException | Error e) {
+        stopPulling.set(true);
+        throw e;
+      }
+    };
   }
 
   /**
@@ -61,43 +75,55 @@ final class SlotScheduler {
    * so the pulling is stopped, the slots are interrupted out of whatever they hold, and
    * the wait resumes until every slot is actually gone.
    */
-  private boolean joinAll(List<Thread> workers) {
+  private SlotOutcomes awaitAll(ExecutorService pool, List<Future<?>> slots) {
+    List<Throwable> failures = new ArrayList<>();
     boolean interrupted = false;
-    for (Thread worker : workers) {
+    for (Future<?> slot : slots) {
       while (true) {
         try {
-          worker.join();
+          slot.get();
           break;
         } catch (InterruptedException e) {
           interrupted = true;
           stopPulling.set(true);
-          workers.forEach(Thread::interrupt);
+          pool.shutdownNow();
+        } catch (ExecutionException e) {
+          failures.add(e.getCause());
+          break;
         }
       }
     }
-    return interrupted;
+    return new SlotOutcomes(interrupted, failures);
   }
 
-  private static void surfaceFirst(boolean interrupted, List<Throwable> failures) {
-    Throwable primary;
-    if (interrupted) {
-      Thread.currentThread().interrupt();
-      primary = new ShardExecutionException("Interrupted while waiting for a drain slot");
-    } else if (failures.isEmpty()) {
-      return;
-    } else {
-      primary = failures.get(0);
+  private record SlotOutcomes(boolean interrupted, List<Throwable> failures) {
+
+    /**
+     * An interrupt outranks the slots' own failures -- the engine call was cancelled from
+     * outside, so that is the story to tell, with the slot failures suppressed behind it.
+     * Otherwise the first slot failure wins and the rest ride along suppressed.
+     */
+    void surfaceFirst() {
+      Throwable primary;
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+        primary = new ShardExecutionException("Interrupted while waiting for a drain slot");
+      } else if (failures.isEmpty()) {
+        return;
+      } else {
+        primary = failures.get(0);
+      }
+      Throwable first = primary;
+      // Identity-guarded: two slots can surface the same Throwable instance -- the JVM's
+      // preallocated OutOfMemoryError -- and self-suppression would mask it entirely.
+      failures.stream().filter(failure -> failure != first).forEach(first::addSuppressed);
+      if (primary instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      if (primary instanceof Error error) {
+        throw error;
+      }
+      throw new ShardExecutionException("A drain slot failed", primary);
     }
-    // Identity-guarded: two slots can surface the same Throwable instance -- the JVM's
-    // preallocated OutOfMemoryError -- and self-suppression would mask it entirely.
-    Throwable first = primary;
-    failures.stream().filter(failure -> failure != first).forEach(first::addSuppressed);
-    if (primary instanceof RuntimeException runtime) {
-      throw runtime;
-    }
-    if (primary instanceof Error error) {
-      throw error;
-    }
-    throw new ShardExecutionException("A drain slot failed", primary);
   }
 }
