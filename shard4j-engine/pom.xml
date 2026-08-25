@@ -270,4 +270,23 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- This module is published to Maven Central. The parent's `release` profile
+         holds the plugin's version and configuration but does not inherit the
+         declaration: the publish goal must exist only in the models of published
+         modules, because it fails on artifact-less modules (shard4j-example) and
+         the bundle upload runs at the last reactor module that declares it. -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
