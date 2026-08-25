@@ -17,15 +17,15 @@ class ClaimOrderingTest {
     return "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]/[method:" + method + "()]";
   }
 
-  private static CensusUnit unit(String method) {
-    return CensusUnit.parse(id(method));
+  private static ClaimableUnit unit(String method) {
+    String executionId = id(method);
+    return new ClaimableUnit(executionId, CensusUnit.parse(executionId), false);
   }
 
   private static List<String> orderedIds(
-      List<CensusUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
-    return ClaimOrdering.order(candidates, unit -> estimates.apply(unit.historyKey()), unit -> false)
-        .stream()
-        .map(CensusUnit::id)
+      List<ClaimableUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
+    return ClaimOrdering.order(candidates, unit -> estimates.apply(unit.historyKey())).stream()
+        .map(ClaimableUnit::id)
         .toList();
   }
 
@@ -50,7 +50,9 @@ class ClaimOrderingTest {
   void noHistoryMeansPinnedHashOrder() {
     List<String> ids = List.of(id("aaa"), id("bbb"), id("ccc"), id("ddd"));
     List<String> ordered =
-        orderedIds(ids.stream().map(CensusUnit::parse).toList(), key -> OptionalLong.empty());
+        orderedIds(
+            ids.stream().map(id -> new ClaimableUnit(id, CensusUnit.parse(id), false)).toList(),
+            key -> OptionalLong.empty());
 
     List<String> expected = new ArrayList<>(ids);
     expected.sort(
@@ -75,16 +77,17 @@ class ClaimOrderingTest {
     String template =
         "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
             + "/[test-template:rows(java.lang.String)]";
-    CensusUnit measured = CensusUnit.parse(template + "/[test-template-invocation:#1]");
-    CensusUnit probe = CensusUnit.parse(template + "/[test-template-invocation:#2]");
-    List<CensusUnit> ordered =
+    ClaimableUnit measured =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(1), false);
+    ClaimableUnit probe =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(2), true);
+    List<ClaimableUnit> ordered =
         ClaimOrdering.order(
             List.of(probe, measured, unit("mystery"), unit("known")),
             unit ->
                 unit.historyKey().value().contains("mystery")
                     ? OptionalLong.empty()
-                    : OptionalLong.of(10_000L),
-            unit -> unit == probe);
+                    : OptionalLong.of(10_000L));
     assertThat(ordered).containsExactly(unit("mystery"), unit("known"), measured, probe);
   }
 

@@ -1,7 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
 import com.marvinformatics.shard4j.protocol.BarrierResponse;
-import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;
@@ -76,27 +75,29 @@ final class Session {
   @Getter private long epoch;
   @Getter private Instant lastActivity;
 
+  /** {@code expansion} carries the census order and content in one structure: each
+   * method-level census id, in registration order, to its expanded claimable units. */
   Session(
       String id,
       int attempt,
       long epoch,
       Map<String, String> metadata,
-      List<String> censusIds,
       Map<String, List<ClaimableUnit>> expansion,
       Instant now) {
     this.id = id;
     this.attempt = attempt;
     this.epoch = epoch;
     this.metadata = Map.copyOf(metadata == null ? Map.of() : metadata);
-    for (String censusId : censusIds) {
-      registered.add(censusId);
-      List<String> unitIds = new ArrayList<>();
-      for (ClaimableUnit expanded : expansion.get(censusId)) {
-        unitIds.add(expanded.unit().id());
-        units.put(expanded.unit().id(), new UnitState(censusId, expanded.unit(), expanded.probe()));
-      }
-      unitsByCensusId.put(censusId, unitIds);
-    }
+    expansion.forEach(
+        (censusId, expanded) -> {
+          registered.add(censusId);
+          List<String> unitIds = new ArrayList<>();
+          for (ClaimableUnit unit : expanded) {
+            unitIds.add(unit.id());
+            units.put(unit.id(), new UnitState(unit));
+          }
+          unitsByCensusId.put(censusId, unitIds);
+        });
     this.createdAt = now;
     this.lastActivity = now;
   }
@@ -126,15 +127,6 @@ final class Session {
 
   boolean isRegistered(String unitId) {
     return units.containsKey(unitId);
-  }
-
-  boolean isProbe(String unitId) {
-    UnitState unit = units.get(unitId);
-    return unit != null && unit.probe;
-  }
-
-  String censusIdOf(String unitId) {
-    return units.get(unitId).censusId;
   }
 
   /** The consumer-declared fleet size, kept as the maximum any registration reported. */
@@ -204,20 +196,20 @@ final class Session {
   }
 
   /** Every claimable unit the given pass could grant right now, in registration order. */
-  List<CensusUnit> claimable(Pass pass) {
+  List<ClaimableUnit> claimable(Pass pass) {
     return units.values().stream()
         .filter(unit -> claimableIn(unit, pass))
         .map(unit -> unit.unit)
         .toList();
   }
 
-  /** The parsed form of a unit already known to be held by this session. */
-  CensusUnit unitOf(String unitId) {
+  /** The expanded form of a unit already known to be held by this session. */
+  ClaimableUnit unitOf(String unitId) {
     return units.get(unitId).unit;
   }
 
   /** The claimable units behind one method-level candidate: itself, or its expansion. */
-  List<CensusUnit> claimableUnitsOf(String censusId, Pass pass) {
+  List<ClaimableUnit> claimableUnitsOf(String censusId, Pass pass) {
     return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
         .map(units::get)
         .filter(unit -> claimableIn(unit, pass))
@@ -231,12 +223,12 @@ final class Session {
    * within the same session. Added only once, and only while the method still exists in
    * this census.
    */
-  void addProbe(String censusId, CensusUnit unit) {
-    if (units.containsKey(unit.id()) || !registered.contains(censusId)) {
+  void addProbe(ClaimableUnit unit) {
+    if (units.containsKey(unit.id()) || !registered.contains(unit.censusId())) {
       return;
     }
-    units.put(unit.id(), new UnitState(censusId, unit, true));
-    unitsByCensusId.get(censusId).add(unit.id());
+    units.put(unit.id(), new UnitState(unit));
+    unitsByCensusId.get(unit.censusId()).add(unit.id());
   }
 
   /**
@@ -247,7 +239,7 @@ final class Session {
   void removeVanishedProbe(String unitId) {
     UnitState unit = units.remove(unitId);
     if (unit != null) {
-      unitsByCensusId.get(unit.censusId).remove(unitId);
+      unitsByCensusId.get(unit.unit.censusId()).remove(unitId);
     }
   }
 
@@ -255,7 +247,7 @@ final class Session {
   boolean measuredUnitsAllNonFailing(String censusId) {
     return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
         .map(units::get)
-        .filter(unit -> !unit.probe)
+        .filter(unit -> !unit.unit.probe())
         .allMatch(unit -> unit.state == TestState.PASSED || unit.state == TestState.SKIPPED);
   }
 
@@ -638,9 +630,7 @@ final class Session {
 
   @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
   private static final class UnitState {
-    private final String censusId;
-    private final CensusUnit unit;
-    private final boolean probe;
+    private final ClaimableUnit unit;
     private TestState state = TestState.PENDING;
     private Pass failedIn;
     private Lease lease;

@@ -116,7 +116,6 @@ public final class CoordinatorCore {
                 request.attempt(),
                 1,
                 request.metadata(),
-                request.tests(),
                 expandCensus(request.tests()),
                 now);
         sessions.put(sessionId, session);
@@ -171,11 +170,11 @@ public final class CoordinatorCore {
         session.touch(now);
         return new ClaimResponse(List.of());
       }
-      List<CensusUnit> claimable =
+      List<ClaimableUnit> claimable =
           request.candidates().stream()
               .flatMap(candidate -> session.claimableUnitsOf(candidate, request.pass()).stream())
               .toList();
-      List<CensusUnit> ordered = orderFor(session, claimable);
+      List<ClaimableUnit> ordered = orderFor(claimable);
       List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
@@ -205,14 +204,14 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<CensusUnit> ordered = orderFor(session, session.claimable(request.pass()));
+      List<ClaimableUnit> ordered = orderFor(session.claimable(request.pass()));
       Set<String> triedClasses = new LinkedHashSet<>();
-      for (CensusUnit top : ordered) {
+      for (ClaimableUnit top : ordered) {
         String className = top.className();
         if (!triedClasses.add(className)) {
           continue;
         }
-        List<CensusUnit> inChosenClass =
+        List<ClaimableUnit> inChosenClass =
             ordered.stream().filter(unit -> className.equals(unit.className())).toList();
         List<Grant> granted =
             grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
@@ -240,38 +239,36 @@ public final class CoordinatorCore {
    * a template whose spreading is the entire point of expanding it.
    */
   private List<Grant> grantCapped(
-      Session session, int shard, Pass pass, List<CensusUnit> ordered, Instant now) {
+      Session session, int shard, Pass pass, List<ClaimableUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
     Map<String, Integer> allowanceLeft = new HashMap<>();
-    for (CensusUnit unit : ordered) {
+    for (ClaimableUnit unit : ordered) {
       if (granted.size() >= maxClaimBatch) {
         break;
       }
       if (unit.invocation() != null) {
-        String censusId = session.censusIdOf(unit.id());
         int left =
             allowanceLeft.computeIfAbsent(
-                censusId, id -> session.invocationAllowance(id, shard, pass, now));
+                unit.censusId(), id -> session.invocationAllowance(id, shard, pass, now));
         if (left <= 0) {
           continue;
         }
-        allowanceLeft.put(censusId, left - 1);
+        allowanceLeft.put(unit.censusId(), left - 1);
       }
       Fence fence = new Fence(session.epoch(), incarnation, ++seq);
       Instant expiresAt = now.plus(leaseTtl);
-      boolean probe = session.isProbe(unit.id());
       session.lease(unit.id(), shard, pass, fence, now, expiresAt);
-      granted.add(new Grant(unit.id(), fence, expiresAt, probe));
+      granted.add(new Grant(unit.id(), fence, expiresAt, unit.probe()));
     }
     return granted;
   }
 
-  /** The scheduler's view of one unit's estimate: per-position for an invocation unit. */
-  private List<CensusUnit> orderFor(Session session, List<CensusUnit> claimable) {
-    return ClaimOrdering.order(claimable, this::estimateOf, unit -> session.isProbe(unit.id()));
+  private List<ClaimableUnit> orderFor(List<ClaimableUnit> claimable) {
+    return ClaimOrdering.order(claimable, this::estimateOf);
   }
 
-  private OptionalLong estimateOf(CensusUnit unit) {
+  /** The scheduler's view of one unit's estimate: per-position for an invocation unit. */
+  private OptionalLong estimateOf(ClaimableUnit unit) {
     return unit.invocation() == null
         ? durations.estimate(unit.historyKey())
         : durations.invocationEstimate(unit.historyKey(), unit.invocation());
@@ -299,18 +296,18 @@ public final class CoordinatorCore {
   private List<ClaimableUnit> expand(String censusId) {
     CensusUnit whole = CensusUnit.parse(censusId);
     if (!whole.template()) {
-      return List.of(new ClaimableUnit(whole, false));
+      return List.of(new ClaimableUnit(censusId, whole, false));
     }
     List<Integer> plan = durations.invocationPlan(whole.historyKey());
     if (plan.isEmpty()) {
-      return List.of(new ClaimableUnit(whole, false));
+      return List.of(new ClaimableUnit(censusId, whole, false));
     }
     List<ClaimableUnit> expanded = new ArrayList<>();
     for (int position : plan) {
-      expanded.add(new ClaimableUnit(whole.atPosition(position), false));
+      expanded.add(new ClaimableUnit(censusId, whole.atPosition(position), false));
     }
     int pastThePlan = plan.get(plan.size() - 1) + 1;
-    expanded.add(new ClaimableUnit(whole.atPosition(pastThePlan), true));
+    expanded.add(new ClaimableUnit(censusId, whole.atPosition(pastThePlan), true));
     log.info(
         "Expanding {} into {} invocation unit(s) plus a cardinality probe at #{}",
         censusId,
@@ -548,7 +545,6 @@ public final class CoordinatorCore {
               record.attempt(),
               record.epoch(),
               record.metadata(),
-              record.tests(),
               expandCensus(record.tests()),
               record.ts()));
       return;
@@ -605,7 +601,9 @@ public final class CoordinatorCore {
         new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished), record.ts());
     // Only the census correction is replayed; the duration-store drop lives in the
     // snapshot. A re-expansion that resurrects the probe merely re-probes and re-vanishes.
-    if (vanished && session.isRegistered(record.testId()) && session.isProbe(record.testId())) {
+    if (vanished
+        && session.isRegistered(record.testId())
+        && session.unitOf(record.testId()).probe()) {
       session.removeVanishedProbe(record.testId());
     }
   }
@@ -736,7 +734,7 @@ public final class CoordinatorCore {
    * walks the growth instead of discovering one row per run.
    */
   private void recordDurations(String sessionId, Session session, ResultRequest request) {
-    CensusUnit unit = session.unitOf(request.testId());
+    ClaimableUnit unit = session.unitOf(request.testId());
     HistoryKey key = unit.historyKey();
     if (unit.invocation() == null) {
       if (request.outcome() != Outcome.PASSED) {
@@ -766,15 +764,16 @@ public final class CoordinatorCore {
     }
     long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
     durations.recordInvocation(key, sessionId, unit.invocation(), duration);
-    String censusId = session.censusIdOf(request.testId());
+    String censusId = unit.censusId();
     if (session.measuredUnitsAllNonFailing(censusId)) {
       durations.markInvocationsComplete(key, sessionId);
     }
     if (request.outcome() == Outcome.PASSED
         && request.pass() == Pass.MAIN
-        && session.isProbe(request.testId())) {
+        && unit.probe()) {
       int next = unit.invocation() + 1;
-      session.addProbe(censusId, CensusUnit.parse(censusId).atPosition(next));
+      session.addProbe(
+          new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true));
       log.info(
           "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
           sessionId,
@@ -800,11 +799,11 @@ public final class CoordinatorCore {
    * failed naming it), but the next session expands from the corrected plan.
    */
   private void applyVanished(String sessionId, Session session, String testId) {
-    CensusUnit unit = session.unitOf(testId);
+    ClaimableUnit unit = session.unitOf(testId);
     if (unit.invocation() == null) {
       return;
     }
-    if (session.isProbe(testId)) {
+    if (unit.probe()) {
       session.removeVanishedProbe(testId);
       log.info(
           "Session {}: cardinality probe {} does not exist; the recorded parameter count"

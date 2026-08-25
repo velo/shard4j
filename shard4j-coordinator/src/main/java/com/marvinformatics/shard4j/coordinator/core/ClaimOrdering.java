@@ -1,13 +1,11 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
-import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import lombok.experimental.UtilityClass;
 
 /**
@@ -26,18 +24,16 @@ import lombok.experimental.UtilityClass;
  * slowest-first; ranking them last costs nothing when the probe vanishes and one run of
  * measurement lag when it is real.
  *
- * <p>Units arrive already parsed, so ranking the whole claimable pool costs no id parsing
- * at all -- which is what makes the open ask affordable over a whole census rather than
- * one class's candidates.
+ * <p>Units arrive already parsed and already carrying their probe flag, so ranking the
+ * whole claimable pool costs no id parsing and no session lookups at all -- which is what
+ * makes the open ask affordable over a whole census rather than one class's candidates.
  */
 @UtilityClass
 public class ClaimOrdering {
 
-  public List<CensusUnit> order(
-      List<CensusUnit> candidates,
-      Function<CensusUnit, OptionalLong> estimates,
-      Predicate<CensusUnit> probes) {
-    record Ranked(CensusUnit unit, OptionalLong estimate) {}
+  public List<ClaimableUnit> order(
+      List<ClaimableUnit> candidates, Function<ClaimableUnit, OptionalLong> estimates) {
+    record Ranked(ClaimableUnit unit, OptionalLong estimate) {}
 
     Comparator<Ranked> hashOrder =
         Comparator.comparing((Ranked ranked) -> ranked.unit().historyKey(), HistoryKey.NO_HISTORY_ORDER)
@@ -46,8 +42,8 @@ public class ClaimOrdering {
     List<Ranked> unknown = new ArrayList<>();
     List<Ranked> known = new ArrayList<>();
     List<Ranked> probe = new ArrayList<>();
-    for (CensusUnit candidate : candidates) {
-      if (probes.test(candidate)) {
+    for (ClaimableUnit candidate : candidates) {
+      if (candidate.probe()) {
         probe.add(new Ranked(candidate, OptionalLong.empty()));
         continue;
       }
@@ -62,7 +58,7 @@ public class ClaimOrdering {
             .thenComparing(ranked -> ranked.unit().id()));
     probe.sort(hashOrder);
 
-    List<CensusUnit> ordered = new ArrayList<>(candidates.size());
+    List<ClaimableUnit> ordered = new ArrayList<>(candidates.size());
     unknown.forEach(ranked -> ordered.add(ranked.unit()));
     known.forEach(ranked -> ordered.add(ranked.unit()));
     probe.forEach(ranked -> ordered.add(ranked.unit()));
