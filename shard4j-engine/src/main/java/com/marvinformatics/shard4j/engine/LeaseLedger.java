@@ -2,12 +2,10 @@ package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Grant;
-import com.marvinformatics.shard4j.protocol.NackRequest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 /**
  * The reconciliation ledger: every lease this shard holds and has not yet explained with
@@ -47,19 +45,18 @@ final class LeaseLedger {
   }
 
   /**
-   * Snapshot-and-clear: one NACK per still-outstanding lease, under its live fence, in
-   * grant order, and the ledger is emptied -- so a second drain is a no-op and nothing is
-   * ever NACKed twice.
+   * Snapshot-and-clear: every still-outstanding grant, live fence included, in grant
+   * order, and the ledger is emptied -- so a second drain is a no-op and nothing is ever
+   * NACKed twice. The grants themselves come back rather than pre-built NACKs, because
+   * what an unexplained lease means depends on what was granted: a cardinality probe
+   * vanishing is expected, a measured invocation vanishing is parameter-set drift, and
+   * anything else is an engine bug -- and only the caller can word those apart.
    */
-  List<NackRequest.NackedLease> drainAll(Function<String, String> reasonFor) {
-    List<NackRequest.NackedLease> nacks = new ArrayList<>();
+  List<Grant> drainAll() {
     synchronized (outstanding) {
-      outstanding.forEach(
-          (unit, grant) ->
-              nacks.add(
-                  new NackRequest.NackedLease(unit, grant.fence(), reasonFor.apply(unit), false)));
+      List<Grant> drained = new ArrayList<>(outstanding.values());
       outstanding.clear();
+      return drained;
     }
-    return nacks;
   }
 }

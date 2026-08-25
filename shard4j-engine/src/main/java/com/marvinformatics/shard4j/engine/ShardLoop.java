@@ -18,7 +18,6 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.junit.platform.engine.ExecutionRequest;
@@ -121,15 +120,21 @@ final class ShardLoop {
    */
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
-        ledger.drainAll(
-            unit ->
-                "Abandoned on shard "
-                    + configuration.shardIndex()
-                    + " (pass "
-                    + configuration.pass()
-                    + "): "
-                    + cause
-                    + "; returned to the pool");
+        ledger.drainAll().stream()
+            .map(
+                grant ->
+                    new NackRequest.NackedLease(
+                        grant.testId(),
+                        grant.fence(),
+                        "Abandoned on shard "
+                            + configuration.shardIndex()
+                            + " (pass "
+                            + configuration.pass()
+                            + "): "
+                            + cause
+                            + "; returned to the pool",
+                        false))
+            .toList();
     if (nacks.isEmpty()) {
       return;
     }
@@ -303,33 +308,99 @@ final class ShardLoop {
 
   /**
    * The pass epilogue. A stale unique-id selector is dropped by the nested discovery in
-   * complete silence -- no event, no error, clean exit -- so nothing else in the system can
-   * notice that a claimed unit was never run. Anything still leased here is explicitly
-   * NACKed back to the pool and the shard fails naming the ids, because a lease this
-   * engine cannot explain is a bug in the engine, never a property of the suite.
+   * complete silence -- no event, no error, clean exit -- so this drain is the only place
+   * a claimed-but-never-run unit can be noticed at all, and what it means depends on what
+   * was granted. A cardinality probe that never materialised is the expected answer --
+   * NACKed as vanished so the coordinator strikes it from the census, and nothing fails.
+   * A measured invocation that never materialised is parameter-set drift: the
+   * {@code @MethodSource} changed since the coordinator last measured this method, so the
+   * position was handed out optimistically and no longer exists -- NACKed as vanished so
+   * history drops the stale position, and the shard fails naming exactly that cause,
+   * because a run that silently skipped a once-real invocation must never look green.
+   * Anything else is a lease this engine cannot explain -- a bug in the engine, never a
+   * property of the suite -- NACKed back to the pool and failed as such.
    */
   private void reconcileOrFail() {
-    List<NackRequest.NackedLease> nacks =
-        ledger.drainAll(
-            unit ->
+    List<Grant> unexplained = ledger.drainAll();
+    if (unexplained.isEmpty()) {
+      return;
+    }
+    List<NackRequest.NackedLease> nacks = new ArrayList<>();
+    List<String> driftedInvocations = new ArrayList<>();
+    List<String> unexplainable = new ArrayList<>();
+    for (Grant grant : unexplained) {
+      boolean invocation = grant.testId().contains("/[test-template-invocation:");
+      if (invocation && grant.probe()) {
+        nacks.add(
+            new NackRequest.NackedLease(
+                grant.testId(),
+                grant.fence(),
+                "Cardinality probe past recorded history did not materialise on shard "
+                    + configuration.shardIndex()
+                    + " (pass "
+                    + configuration.pass()
+                    + "); the recorded parameter count still stands",
+                true));
+      } else if (invocation) {
+        nacks.add(
+            new NackRequest.NackedLease(
+                grant.testId(),
+                grant.fence(),
+                "Invocation no longer exists on shard "
+                    + configuration.shardIndex()
+                    + " (pass "
+                    + configuration.pass()
+                    + "): the parameter set changed since this invocation was last"
+                    + " measured; dropped from the plan and returned to the pool",
+                true));
+        driftedInvocations.add(grant.testId());
+      } else {
+        nacks.add(
+            new NackRequest.NackedLease(
+                grant.testId(),
+                grant.fence(),
                 "Leased but never produced a terminal outcome on shard "
                     + configuration.shardIndex()
                     + " (pass "
                     + configuration.pass()
-                    + "); returned to the pool");
-    if (nacks.isEmpty()) {
-      return;
+                    + "); returned to the pool",
+                false));
+        unexplainable.add(grant.testId());
+      }
     }
     gateway.nack(nacks);
-    throw new ShardExecutionException(
-        "Shard "
-            + configuration.shardIndex()
-            + " could not reconcile "
-            + nacks.size()
-            + " leased unit(s) to a terminal outcome; they were NACKed back to the pool: "
-            + nacks.stream()
-                .map(NackRequest.NackedLease::testId)
-                .collect(Collectors.joining(", ")));
+    if (driftedInvocations.isEmpty() && unexplainable.isEmpty()) {
+      log.log(
+          System.Logger.Level.INFO,
+          "Shard "
+              + configuration.shardIndex()
+              + ": every unexplained lease was a cardinality probe; parameter counts"
+              + " confirmed");
+      return;
+    }
+    StringBuilder message = new StringBuilder("Shard ").append(configuration.shardIndex());
+    if (!driftedInvocations.isEmpty()) {
+      message
+          .append(" was granted ")
+          .append(driftedInvocations.size())
+          .append(" invocation(s) that no longer exist -- the parameter set changed since")
+          .append(" they were last measured -- ")
+          .append(String.join(", ", driftedInvocations))
+          .append("; history has dropped them and the next run expands from the corrected")
+          .append(" plan");
+    }
+    if (!unexplainable.isEmpty()) {
+      if (!driftedInvocations.isEmpty()) {
+        message.append(". It also");
+      }
+      message
+          .append(" could not reconcile ")
+          .append(unexplainable.size())
+          .append(" leased unit(s) to a terminal outcome; they were NACKed back to the")
+          .append(" pool: ")
+          .append(String.join(", ", unexplainable));
+    }
+    throw new ShardExecutionException(message.toString());
   }
 
   /**
