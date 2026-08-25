@@ -19,6 +19,9 @@ class EndpointRecordsTest {
           "POST /sessions/{id}/register", RegisterRequest.class, RegisterResponse.class
         },
         new Object[] {"POST /sessions/{id}/claims", ClaimRequest.class, ClaimResponse.class},
+        new Object[] {
+          "POST /sessions/{id}/next", NextClassRequest.class, NextClassResponse.class
+        },
         new Object[] {"POST /sessions/{id}/results", ResultRequest.class, ResultResponse.class},
         new Object[] {"POST /sessions/{id}/nack", NackRequest.class, NackResponse.class},
         new Object[] {"POST /sessions/{id}/barrier", BarrierRequest.class, BarrierResponse.class},

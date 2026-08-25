@@ -144,13 +144,16 @@ cross-tenant write access. A second tenant gets a second instance.
 
 There is no public specification document yet; the shape of the system is this.
 
-A run is a session. Each CI shard registers with the coordinator, then loops: claim a
-class-batch, run it, report each result, claim again, and depart when the coordinator has
-nothing left to hand out. The coordinator answers each claim with the slowest
-not-yet-claimed classes first, using durations measured on earlier runs; a test with no
-history is ordered by a hash of its identity, so the schedule stays deterministic without
-being alphabetical. Every claim is a lease with an expiry and a fence, so a shard that
-stalls or dies loses its work back to the queue instead of taking the run down with it.
+A run is a session. Each CI shard registers with the coordinator, then loops: ask what
+to run next, drain the class the coordinator names, report each result, and ask again
+until the coordinator has nothing left to hand out. The choice of class is the
+coordinator's, made from durations measured on earlier runs: the class holding the
+slowest remaining test is named first, and the answer carries that class's first batch of
+leases so a named class is never an empty promise. A test with no history runs before
+every measured one, ordered by a hash of its identity, so the schedule stays
+deterministic without being alphabetical. Every grant is a lease with an expiry and a
+fence, so a shard that stalls or dies loses its work back to the queue instead of taking
+the run down with it.
 Draining a class grants all of its leases up front, so the lease TTL must cover a shard's
 slowest class share, not merely its slowest single test.
 

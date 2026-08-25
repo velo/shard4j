@@ -64,7 +64,7 @@ final class Session {
     this.attempt = attempt;
     this.epoch = epoch;
     this.metadata = Map.copyOf(metadata == null ? Map.of() : metadata);
-    tests.forEach(testId -> units.put(testId, new UnitState()));
+    tests.forEach(testId -> units.put(testId, new UnitState(HistoryKeys.parse(testId))));
     this.lastActivity = now;
   }
 
@@ -135,12 +135,28 @@ final class Session {
   }
 
   boolean claimableIn(String testId, Pass pass) {
-    UnitState unit = units.get(testId);
+    return claimableIn(units.get(testId), pass);
+  }
+
+  private static boolean claimableIn(UnitState unit, Pass pass) {
     return switch (pass) {
       case MAIN -> unit.state == TestState.PENDING;
       case RETRY1 -> unit.state == TestState.FAILED && unit.failedIn == Pass.MAIN;
       case RETRY2 -> unit.state == TestState.FAILED && unit.failedIn == Pass.RETRY1;
     };
+  }
+
+  /** Every census unit the given pass could grant right now, in registration order. */
+  List<CensusUnit> claimable(Pass pass) {
+    return units.values().stream()
+        .filter(unit -> claimableIn(unit, pass))
+        .map(unit -> unit.unit)
+        .toList();
+  }
+
+  /** The parsed form of a unit already known to be registered. */
+  CensusUnit unitOf(String testId) {
+    return units.get(testId).unit;
   }
 
   Pass completedPassOf(int shard) {
@@ -445,11 +461,16 @@ final class Session {
   }
 
   private static final class UnitState {
+    private final CensusUnit unit;
     private TestState state = TestState.PENDING;
     private Pass failedIn;
     private Lease lease;
     private String reason;
     private final List<SessionView.RecordView> records = new ArrayList<>();
+
+    private UnitState(CensusUnit unit) {
+      this.unit = unit;
+    }
   }
 
   record Lease(

@@ -4,14 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.Grant;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,8 +42,14 @@ class AbandonedLeasesIT {
   private static GenericContainer<?> coordinator;
 
   @BeforeAll
-  static void start() {
-    coordinator = CoordinatorContainer.start();
+  static void seedThenStart() {
+    // The template gets a measured duration so the no-history PLAIN units are
+    // deterministically handed out first, putting the ghost's lease outstanding by the
+    // time the second open ask dies. The first ask asserts that below, so this seed
+    // cannot quietly stop mattering.
+    Path dataDir = CoordinatorContainer.newDataDir();
+    CoordinatorContainer.seedHistory(dataDir, Map.of(TEMPLATE, 9_000L));
+    coordinator = CoordinatorContainer.start(Map.of(), dataDir);
   }
 
   @AfterAll
@@ -66,21 +74,26 @@ class AbandonedLeasesIT {
             null,
             true);
     // The ghost never produces an outcome, so its lease is still outstanding when the
-    // next class's claim dies -- the exact state a mid-pass abnormal exit strands.
+    // second open ask dies -- the exact state a mid-pass abnormal exit strands.
     DiscoveredCensus census =
         DiscoveredCensus.of(
             List.of(
                 new DiscoveredCensus.ClassUnits(
                     PLAIN, List.of(new ExecutionId(PASSES), new ExecutionId(GHOST))),
                 new DiscoveredCensus.ClassUnits(ROWS, List.of(new ExecutionId(TEMPLATE)))));
+    AtomicInteger openAsks = new AtomicInteger();
     CoordinatorGateway gateway =
         new CoordinatorGateway(configuration, census.unitIds()) {
           @Override
-          synchronized List<Grant> claim(String className, List<String> candidates) {
-            if (className.equals(ROWS)) {
+          synchronized NextClassResponse nextClass() {
+            if (openAsks.incrementAndGet() > 1) {
               throw new IllegalStateException("simulated transport failure: retry budget spent");
             }
-            return super.claim(className, candidates);
+            NextClassResponse first = super.nextClass();
+            // The seeded template duration is what puts PLAIN first; if that ever stops
+            // holding, the ghost is never leased and this test would pass vacuously.
+            assertThat(first.className()).isEqualTo(PLAIN);
+            return first;
           }
         };
     ShardLoop loop =

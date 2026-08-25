@@ -2,7 +2,10 @@ package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.UniqueId.Segment;
 
@@ -22,10 +25,12 @@ final class DiscoveredCensus {
   /** One claimable class: the coordinator's claim unit is a class-batch. */
   record ClassUnits(String className, List<ExecutionId> units) {}
 
-  private final List<ClassUnits> classes;
+  private final Map<String, ClassUnits> byClassName;
 
   private DiscoveredCensus(List<ClassUnits> classes) {
-    this.classes = List.copyOf(classes);
+    Map<String, ClassUnits> byName = new LinkedHashMap<>();
+    classes.forEach(entry -> byName.put(entry.className(), entry));
+    this.byClassName = Collections.unmodifiableMap(byName);
   }
 
   static DiscoveredCensus of(TestDescriptor jupiterRoot) {
@@ -64,12 +69,23 @@ final class DiscoveredCensus {
             + " here rather than silently run nowhere.");
   }
 
-  List<ClassUnits> classes() {
-    return classes;
+  /**
+   * The units discovered for one class. Which class runs next is the coordinator's
+   * decision, so this is a lookup rather than a sequence: a name the census does not hold
+   * is a coordinator bug -- registration proved both sides agree on the census -- and it
+   * fails here naming the class rather than resolving to nothing further down.
+   */
+  ClassUnits classNamed(String className) {
+    ClassUnits entry = byClassName.get(className);
+    if (entry == null) {
+      throw new ShardExecutionException(
+          "Granted a class this shard never registered: " + className);
+    }
+    return entry;
   }
 
   List<String> unitIds() {
-    return classes.stream()
+    return byClassName.values().stream()
         .flatMap(entry -> entry.units().stream())
         .map(ExecutionId::value)
         .sorted()
@@ -77,6 +93,6 @@ final class DiscoveredCensus {
   }
 
   boolean isEmpty() {
-    return classes.isEmpty();
+    return byClassName.isEmpty();
   }
 }

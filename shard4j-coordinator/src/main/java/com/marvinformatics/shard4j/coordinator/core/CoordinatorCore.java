@@ -15,6 +15,8 @@ import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
@@ -160,21 +162,68 @@ public final class CoordinatorCore {
         session.touch(now);
         return new ClaimResponse(List.of());
       }
-      List<String> claimable =
+      List<CensusUnit> claimable =
           request.candidates().stream()
               .filter(candidate -> session.claimableIn(candidate, request.pass()))
+              .map(session::unitOf)
               .toList();
-      List<String> ordered = ClaimOrdering.order(claimable, durations::estimate);
-      List<Grant> granted = new ArrayList<>();
-      for (String testId : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
-        Fence fence = new Fence(session.epoch(), incarnation, ++seq);
-        Instant expiresAt = now.plus(leaseTtl);
-        session.lease(testId, request.shard(), request.pass(), fence, now, expiresAt);
-        granted.add(new Grant(testId, fence, expiresAt));
-      }
+      List<CensusUnit> ordered = ClaimOrdering.order(claimable, durations::estimate);
+      List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
+  }
+
+  /**
+   * The open ask -- "what do I run next?" -- which is where cross-class slowest-first
+   * actually lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class
+   * of the top-ranked unit is the answer, and that class's first capped batch is leased in
+   * the same locked breath so a named class is never an empty promise. The pool arrives
+   * already parsed, so ranking it costs no id surgery. Ranking whole units
+   * rather than class aggregates means the fixed unit rules extend across classes for
+   * free: a class holding a no-history unit outranks every fully-measured class, in the
+   * pinned hash order of its unknowns, and known classes follow by their slowest remaining
+   * unit. The shard drains the named class through the per-class claim before asking
+   * again, which is what keeps {@code @BeforeAll} a once-per-class cost.
+   */
+  public NextClassResponse nextClass(String sessionId, NextClassRequest request) {
+    synchronized (writeLock) {
+      Instant now = clock.instant();
+      Session session = requireSession(sessionId, now);
+      sweepSilentShards(sessionId, session, now);
+      // An early-released shard was told it is not needed; naming a class would un-decide
+      // that.
+      if (session.isReleased(request.shard())) {
+        session.touch(now);
+        return new NextClassResponse(null, List.of());
+      }
+      List<CensusUnit> ordered =
+          ClaimOrdering.order(session.claimable(request.pass()), durations::estimate);
+      if (ordered.isEmpty()) {
+        joinLogged(sessionId, session, request.shard(), now);
+        return new NextClassResponse(null, List.of());
+      }
+      String className = ordered.get(0).className();
+      List<CensusUnit> inChosenClass =
+          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
+      List<Grant> granted =
+          grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+      joinLogged(sessionId, session, request.shard(), now);
+      return new NextClassResponse(className, granted);
+    }
+  }
+
+  /** Leases the capped prefix of an already-ordered claimable list. */
+  private List<Grant> grantCapped(
+      Session session, int shard, Pass pass, List<CensusUnit> ordered, Instant now) {
+    List<Grant> granted = new ArrayList<>();
+    for (CensusUnit unit : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
+      Fence fence = new Fence(session.epoch(), incarnation, ++seq);
+      Instant expiresAt = now.plus(leaseTtl);
+      session.lease(unit.id(), shard, pass, fence, now, expiresAt);
+      granted.add(new Grant(unit.id(), fence, expiresAt));
+    }
+    return granted;
   }
 
   public ResultResponse result(String sessionId, ResultRequest request) {

@@ -15,6 +15,8 @@ import com.marvinformatics.shard4j.protocol.DepartResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
@@ -73,6 +75,9 @@ final class CoordinatorClient {
 
     @RequestLine("POST /sessions/{sessionId}/claims")
     Response claimRaw(@Param("sessionId") String sessionId, ClaimRequest request);
+
+    @RequestLine("POST /sessions/{sessionId}/next")
+    NextClassResponse next(@Param("sessionId") String sessionId, NextClassRequest request);
 
     @RequestLine("POST /sessions/{sessionId}/results")
     ResultResponse result(@Param("sessionId") String sessionId, ResultRequest request);
@@ -140,6 +145,10 @@ final class CoordinatorClient {
 
   RawResponse claimRaw(String sessionId, ClaimRequest request) {
     return raw(api.claimRaw(sessionId, request));
+  }
+
+  NextClassResponse next(String sessionId, NextClassRequest request) {
+    return api.next(sessionId, request);
   }
 
   ResultResponse result(String sessionId, ResultRequest request) {

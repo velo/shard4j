@@ -7,12 +7,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class ClaimOrderingTest {
 
   private static String id(String method) {
     return "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]/[method:" + method + "()]";
+  }
+
+  private static CensusUnit unit(String method) {
+    return HistoryKeys.parse(id(method));
+  }
+
+  private static List<String> orderedIds(
+      List<CensusUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
+    return ClaimOrdering.order(candidates, estimates).stream().map(CensusUnit::id).toList();
   }
 
   @Test
@@ -23,8 +33,8 @@ class ClaimOrderingTest {
             "com.example.orders.OrderIT#slow()", 702_000L,
             "com.example.orders.OrderIT#mid()", 90_000L);
     List<String> ordered =
-        ClaimOrdering.order(
-            List.of(id("fast"), id("mid"), id("slow")),
+        orderedIds(
+            List.of(unit("fast"), unit("mid"), unit("slow")),
             key ->
                 estimates.containsKey(key.value())
                     ? OptionalLong.of(estimates.get(key.value()))
@@ -35,7 +45,8 @@ class ClaimOrderingTest {
   @Test
   void noHistoryMeansPinnedHashOrder() {
     List<String> ids = List.of(id("aaa"), id("bbb"), id("ccc"), id("ddd"));
-    List<String> ordered = ClaimOrdering.order(ids, key -> OptionalLong.empty());
+    List<String> ordered =
+        orderedIds(ids.stream().map(HistoryKeys::parse).toList(), key -> OptionalLong.empty());
 
     List<String> expected = new ArrayList<>(ids);
     expected.sort(
@@ -47,8 +58,8 @@ class ClaimOrderingTest {
   @Test
   void unknownsAlwaysPrecedeKnownsAndAreNeverComparedToThem() {
     List<String> ordered =
-        ClaimOrdering.order(
-            List.of(id("known"), id("mystery"), id("alsoKnown")),
+        orderedIds(
+            List.of(unit("known"), unit("mystery"), unit("alsoKnown")),
             key ->
                 key.value().contains("mystery") ? OptionalLong.empty() : OptionalLong.of(50_000L));
     assertThat(ordered.get(0)).isEqualTo(id("mystery"));
@@ -58,8 +69,7 @@ class ClaimOrderingTest {
   @Test
   void equalKnownDurationsTieBreakOnTheKeyItself() {
     List<String> ordered =
-        ClaimOrdering.order(
-            List.of(id("zed"), id("alpha")), key -> OptionalLong.of(10_000L));
+        orderedIds(List.of(unit("zed"), unit("alpha")), key -> OptionalLong.of(10_000L));
     assertThat(ordered).containsExactly(id("alpha"), id("zed"));
   }
 }

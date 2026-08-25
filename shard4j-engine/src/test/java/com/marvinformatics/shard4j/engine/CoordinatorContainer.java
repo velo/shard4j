@@ -14,6 +14,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.experimental.UtilityClass;
@@ -31,6 +33,8 @@ import org.testcontainers.images.builder.ImageFromDockerfile;
 class CoordinatorContainer {
 
   final String SECRET = "local-integration-only";
+  final String TENANT_KEY = "example/orders-service";
+  final String TENANT_SLUG = "orders-service";
 
   private final ImageFromDockerfile IMAGE =
       new ImageFromDockerfile()
@@ -48,16 +52,23 @@ class CoordinatorContainer {
   }
 
   GenericContainer<?> start(Map<String, String> extraEnvironment) {
-    Path dataDir;
+    return start(extraEnvironment, newDataDir());
+  }
+
+  /** Tests that seed history before first boot prepare the data directory themselves. */
+  Path newDataDir() {
     try {
-      dataDir = Files.createTempDirectory(Path.of("target"), "engine-it-data");
+      return Files.createTempDirectory(Path.of("target"), "engine-it-data");
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
+  }
+
+  GenericContainer<?> start(Map<String, String> extraEnvironment, Path dataDir) {
     Map<String, String> environment = new HashMap<>();
     environment.put("COORDINATOR_SECRETS", SECRET);
-    environment.put("COORDINATOR_TENANT_KEY", "example/orders-service");
-    environment.put("COORDINATOR_TENANT_SLUG", "orders-service");
+    environment.put("COORDINATOR_TENANT_KEY", TENANT_KEY);
+    environment.put("COORDINATOR_TENANT_SLUG", TENANT_SLUG);
     environment.put("COORDINATOR_DATA_DIR", "/data");
     environment.putAll(extraEnvironment);
     GenericContainer<?> container =
@@ -91,6 +102,44 @@ class CoordinatorContainer {
 
     @RequestLine("GET /sessions/{sessionId}")
     SessionView view(@Param("sessionId") String sessionId);
+  }
+
+  /**
+   * A second shard against the same session, speaking the engine's own production client
+   * rather than a test-local restatement of it: a contract change then breaks these tests
+   * at compile time, which is the whole reason that interface has no version field.
+   */
+  CoordinatorClient shardApiOf(GenericContainer<?> container) {
+    ObjectMapper json = JsonMapper.builder().addModule(new JavaTimeModule()).build();
+    return Feign.builder()
+        .encoder(new JacksonEncoder(json))
+        .decoder(new JacksonDecoder(json))
+        .requestInterceptor(template -> template.header("Authorization", "Bearer " + SECRET))
+        .target(CoordinatorClient.class, urlOf(container));
+  }
+
+  /** Seeds a day of duration history into a data directory before its container boots. */
+  void seedHistory(Path dataDir, Map<String, Long> durationMsByTestId) {
+    try {
+      Path historyDir = dataDir.resolve(TENANT_SLUG).resolve("history");
+      Files.createDirectories(historyDir);
+      StringBuilder lines = new StringBuilder();
+      durationMsByTestId.forEach(
+          (testId, durationMs) ->
+              lines
+                  .append("{\"type\":\"COMPLETION\",\"project\":\"")
+                  .append(TENANT_KEY)
+                  .append("\",\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\"")
+                  .append(testId)
+                  .append("\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\"")
+                  .append(",\"durationMs\":")
+                  .append(durationMs)
+                  .append(",\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n"));
+      Files.writeString(
+          historyDir.resolve(LocalDate.now(ZoneOffset.UTC) + ".jsonl"), lines.toString());
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   private String currentUidGid() {

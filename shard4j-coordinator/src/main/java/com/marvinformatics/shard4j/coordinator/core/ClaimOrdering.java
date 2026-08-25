@@ -16,30 +16,35 @@ import lombok.experimental.UtilityClass;
  * <p>"Is this duration known?" is the absence of the key in the store -- no flag, no
  * sentinel estimate. Unknowns are never compared against a known duration, which is what
  * makes the missing-estimate question moot instead of a guessing game.
+ *
+ * <p>Units arrive already parsed, so ranking the whole claimable pool costs no id parsing
+ * at all -- which is what makes the open ask affordable over a whole census rather than
+ * one class's candidates.
  */
 @UtilityClass
 public class ClaimOrdering {
 
-  public List<String> order(
-      List<String> candidates, Function<HistoryKey, OptionalLong> estimates) {
-    record Ranked(String id, HistoryKey key, OptionalLong estimate) {}
+  public List<CensusUnit> order(
+      List<CensusUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
+    record Ranked(CensusUnit unit, OptionalLong estimate) {}
 
     List<Ranked> unknown = new ArrayList<>();
     List<Ranked> known = new ArrayList<>();
-    for (String id : candidates) {
-      HistoryKey key = HistoryKeys.of(id);
-      OptionalLong estimate = estimates.apply(key);
-      (estimate.isPresent() ? known : unknown).add(new Ranked(id, key, estimate));
+    for (CensusUnit candidate : candidates) {
+      OptionalLong estimate = estimates.apply(candidate.historyKey());
+      (estimate.isPresent() ? known : unknown).add(new Ranked(candidate, estimate));
     }
-    unknown.sort(Comparator.comparing(Ranked::key, HistoryKey.NO_HISTORY_ORDER));
+    unknown.sort(
+        Comparator.comparing((Ranked ranked) -> ranked.unit().historyKey(),
+            HistoryKey.NO_HISTORY_ORDER));
     known.sort(
         Comparator.comparingLong((Ranked ranked) -> ranked.estimate().getAsLong())
             .reversed()
-            .thenComparing(ranked -> ranked.key().value()));
+            .thenComparing(ranked -> ranked.unit().historyKey().value()));
 
-    List<String> ordered = new ArrayList<>(candidates.size());
-    unknown.forEach(ranked -> ordered.add(ranked.id()));
-    known.forEach(ranked -> ordered.add(ranked.id()));
+    List<CensusUnit> ordered = new ArrayList<>(candidates.size());
+    unknown.forEach(ranked -> ordered.add(ranked.unit()));
+    known.forEach(ranked -> ordered.add(ranked.unit()));
     return ordered;
   }
 }

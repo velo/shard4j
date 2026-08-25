@@ -4,6 +4,7 @@ import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import java.time.Duration;
 import java.time.Instant;
@@ -18,9 +19,10 @@ import org.junit.platform.engine.TestDescriptor;
 
 /**
  * One pass of the coordinated loop, inside one {@code execute()} call: register the
- * census, sweep the classes claiming incrementally, run each grant through a nested
- * Jupiter execution, report every unit as it completes, reconcile, and hold at the
- * barrier. The next pass is the next failsafe execution block in the same Maven run.
+ * census, ask the coordinator what to run next and drain each class it names, run each
+ * grant through a nested Jupiter execution, report every unit as it completes, reconcile,
+ * and hold at the barrier. The next pass is the next failsafe execution block in the same
+ * Maven run.
  */
 final class ShardLoop {
 
@@ -120,32 +122,34 @@ final class ShardLoop {
   }
 
   /**
-   * Sweeps the census class by class, draining each class before moving on, until a full
-   * sweep grants nothing -- the pull model's terminal state for this shard. An empty
-   * first grant skips the class outright: no nested discovery, no {@code @BeforeAll}, no
-   * class initialiser.
+   * Pulls until the coordinator answers the open ask with nothing -- the terminal state
+   * for this shard. Each ask hands back the class the coordinator wants run next, chosen
+   * by its own schedule with the first batch of leases attached; the shard drains that
+   * class before asking again. A class the coordinator never names is never entered at
+   * all: no nested discovery, no {@code @BeforeAll}, no class initialiser.
    */
   private void claimAndRunUntilDrained(DiscoveredCensus census) {
-    boolean grantedAnything = true;
-    while (grantedAnything) {
-      grantedAnything = false;
-      for (DiscoveredCensus.ClassUnits entry : census.classes()) {
-        List<Grant> drained = drainClass(entry);
-        if (drained.isEmpty()) {
-          continue;
-        }
-        grantedAnything = true;
-        runBatch(drained);
+    while (true) {
+      NextClassResponse next = gateway.nextClass();
+      if (next.granted().isEmpty()) {
+        return;
       }
+      // Tracked before the census is consulted: an unknown class name is a coordinator
+      // bug, and its grants are NACKed on the way out rather than left to the TTL.
+      track(next.granted());
+      DiscoveredCensus.ClassUnits entry = census.classNamed(next.className());
+      List<Grant> drained = new ArrayList<>(next.granted());
+      drained.addAll(drainClass(entry));
+      runBatch(next.className(), drained);
     }
   }
 
   /**
-   * Claims the class until it yields nothing, so everything this shard will run there
-   * shares one nested execution -- one class instance, one {@code @BeforeAll} -- instead
-   * of paying the class setup once per capped claim batch, with other classes interleaved
-   * between the payments. Still the pull model: each claim is a fresh ask, and whatever
-   * other shards took in between simply is not granted here.
+   * Claims the named class until it yields nothing, so everything this shard will run
+   * there shares one nested execution -- one class instance, one {@code @BeforeAll} --
+   * instead of paying the class setup once per capped claim batch, with other classes
+   * interleaved between the payments. Still the pull model: each claim is a fresh ask,
+   * and whatever other shards took in between simply is not granted here.
    */
   private List<Grant> drainClass(DiscoveredCensus.ClassUnits entry) {
     List<String> candidates = entry.units().stream().map(ExecutionId::value).toList();
@@ -155,19 +159,31 @@ final class ShardLoop {
       if (grants.isEmpty()) {
         return drained;
       }
+      track(grants);
       drained.addAll(grants);
     }
   }
 
-  private void runBatch(List<Grant> grants) {
+  /**
+   * Every grant enters reconciliation the moment it arrives, not when its batch runs: a
+   * failure between claiming and running -- a transport death mid-drain, a malformed
+   * grant -- must NACK what was already leased instead of abandoning it to the TTL.
+   */
+  private void track(List<Grant> grants) {
+    synchronized (reconciliation) {
+      grants.forEach(grant -> reconciliation.put(grant.testId(), grant));
+    }
+  }
+
+  private void runBatch(String className, List<Grant> grants) {
     Map<String, Grant> byUnit = new LinkedHashMap<>();
     grants.forEach(grant -> byUnit.put(grant.testId(), grant));
-    synchronized (reconciliation) {
-      reconciliation.putAll(byUnit);
-    }
-    // Grant order is the coordinator's slowest-first schedule; the nested discovery
-    // receives it intact rather than re-shuffled by a hash-ordered set.
-    List<ExecutionId> leased = byUnit.keySet().stream().map(ShardLoop::classRootedLease).toList();
+    // Order is the coordinator's schedule end to end: it chose this class over every
+    // other on the open ask, and within the class the grants arrived slowest-first. The
+    // nested discovery receives that order intact rather than re-shuffled by a
+    // hash-ordered set.
+    List<ExecutionId> leased =
+        byUnit.keySet().stream().map(unitId -> classRootedLease(className, unitId)).toList();
     TestDescriptor batch =
         jupiter.discoverIds(
             leased,
@@ -188,11 +204,19 @@ final class ShardLoop {
    * granted unit the nested discovery could never resolve would be dropped in silence and
    * fall to reconciliation with a message blaming this engine, so a malformed grant fails
    * here naming what the coordinator actually sent.
+   *
+   * <p>The check is against the class the coordinator named, not merely against the
+   * Jupiter root, because the whole batch becomes one nested execution -- one class
+   * instance, one {@code @BeforeAll}. A grant from some other class would run there under
+   * the wrong setup, and nothing downstream could tell.
    */
-  private static ExecutionId classRootedLease(String unitId) {
-    if (!unitId.startsWith("[engine:junit-jupiter]/[class:")) {
+  private static ExecutionId classRootedLease(String className, String unitId) {
+    if (!unitId.startsWith("[engine:junit-jupiter]/[class:" + className + "]/")) {
       throw new ShardExecutionException(
-          "Granted a unit this engine could never have registered: " + unitId);
+          "Granted a unit outside the class the coordinator named ("
+              + className
+              + "), which this engine could never have registered as part of it: "
+              + unitId);
     }
     return new ExecutionId(unitId);
   }

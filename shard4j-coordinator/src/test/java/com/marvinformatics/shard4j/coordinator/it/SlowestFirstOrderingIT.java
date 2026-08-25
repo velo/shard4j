@@ -12,8 +12,6 @@ import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -45,13 +43,7 @@ class SlowestFirstOrderingIT {
   @BeforeAll
   static void seedThenStart() throws IOException {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "ordering-data");
-    Path historyDir =
-        dataDir.resolve(CoordinatorContainers.TENANT_SLUG).resolve("history");
-    Files.createDirectories(historyDir);
-    String today = LocalDate.now(ZoneOffset.UTC).toString();
-    Files.writeString(
-        historyDir.resolve(today + ".jsonl"),
-        seedLine(SLOW, 300_000) + seedLine(MID, 120_000) + seedLine(FAST, 2_000));
+    History.seed(dataDir, Map.of(SLOW, 300_000L, MID, 120_000L, FAST, 2_000L));
 
     coordinator = CoordinatorContainers.coordinator(dataDir, Map.of());
     coordinator.start();
@@ -61,16 +53,6 @@ class SlowestFirstOrderingIT {
   @AfterAll
   static void stop() {
     coordinator.stop();
-  }
-
-  private static String seedLine(String testId, long durationMs) {
-    return "{\"type\":\"COMPLETION\",\"project\":\""
-        + CoordinatorContainers.TENANT_KEY
-        + "\",\"session\":\"seeded-elsewhere\",\"epoch\":1,\"testId\":\""
-        + testId.replace("\\", "\\\\")
-        + "\",\"unit\":true,\"shard\":0,\"pass\":\"MAIN\",\"outcome\":\"PASSED\",\"durationMs\":"
-        + durationMs
-        + ",\"firstOnShard\":false,\"ts\":\"2026-08-20T10:00:00Z\"}\n";
   }
 
   @Test
