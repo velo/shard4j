@@ -1,7 +1,7 @@
 package com.marvinformatics.shard4j.protocol;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.List.of;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.Map;
@@ -31,39 +31,40 @@ class EndpointRecordsTest {
   @ParameterizedTest(name = "[{index}] {0}")
   @MethodSource("endpoints")
   void carriesARecordOnBothSides(String endpoint, Class<?> request, Class<?> response) {
-    assertTrue(request.isRecord(), endpoint + " request must be a record");
-    assertTrue(response.isRecord(), endpoint + " response must be a record");
+    assertThat(request.isRecord()).as(endpoint + " request must be a record").isTrue();
+    assertThat(response.isRecord()).as(endpoint + " response must be a record").isTrue();
   }
 
   @Test
   void theReadEndpointIsARecordWithNoRequestBody() {
-    assertTrue(SessionView.class.isRecord(), "GET /sessions/{id} returns the session view");
+    assertThat(SessionView.class.isRecord())
+        .as("GET /sessions/{id} returns the session view")
+        .isTrue();
   }
 
   @Test
   void aStaleResultIsRejectedWithTheFenceThatBeatIt() {
     ResultResponse rejected = new ResultResponse(false, new Fence(2, 5, 7));
 
-    assertEquals(false, rejected.accepted());
-    assertEquals(new Fence(2, 5, 7), rejected.currentFence());
+    assertThat(rejected.accepted()).isFalse();
+    assertThat(rejected.currentFence()).isEqualTo(new Fence(2, 5, 7));
   }
 
   @Test
   void aNackAnswersPerLeaseBecauseStaleEntriesAreRejectedIndividually() {
-    NackResponse response = new NackResponse(List.of("released-id"), List.of("stale-id"));
+    NackResponse response = new NackResponse(of("released-id"), of("stale-id"));
 
-    assertEquals(List.of("released-id"), response.released());
-    assertEquals(List.of("stale-id"), response.rejected());
+    assertThat(response.released()).containsExactlyElementsOf(of("released-id"));
+    assertThat(response.rejected()).containsExactlyElementsOf(of("stale-id"));
   }
 
   @Test
   void aRegistrationMismatchNamesBothHashes() {
     RegisterResponse response = new RegisterResponse(1, 61);
 
-    assertEquals(1, response.epoch());
-    assertEquals(61, response.registeredCount());
-    assertEquals(
-        Map.of("ci", "github-actions"),
-        new RegisterRequest(3, 2, Map.of("ci", "github-actions"), List.of()).metadata());
+    assertThat(response.epoch()).isOne();
+    assertThat(response.registeredCount()).isEqualTo(61);
+    assertThat(new RegisterRequest(3, 2, Map.of("ci", "github-actions"), List.of()).metadata())
+        .containsExactlyInAnyOrderEntriesOf(Map.of("ci", "github-actions"));
   }
 }

@@ -9,7 +9,6 @@ import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -30,7 +29,7 @@ class RestartReplayIT {
   private static final String CLASS_B = "com.example.orders.ReplayBetaIT";
 
   @Test
-  void givenAKilledCoordinator_whenRestartedOnTheSameVolume_thenPassedSetIntactAndLeasesReturned() throws IOException {
+  void givenAKilledCoordinator_whenRestartedOnTheSameVolume_thenPassedSetIntactAndLeasesReturned() throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "restart-replay-data");
     String sessionId = UUID.randomUUID().toString();
     String passed = Ids.method(CLASS_A, "alreadyDone");
@@ -91,8 +90,8 @@ class RestartReplayIT {
       assertThat(CoordinatorClient.stateOf(view, untouched)).isEqualTo(TestState.PENDING);
 
       // The recovered duration survives too: it came from the history files on the volume.
-      assertThat(Files.exists(dataDir.resolve(CoordinatorContainers.TENANT_SLUG).resolve("current.json")))
-          .isTrue();
+      assertThat(dataDir.resolve(CoordinatorContainers.TENANT_SLUG).resolve("current.json"))
+          .exists();
 
       Fence reclaimed = client.claimOne(sessionId, 0, leased);
       assertThat(reclaimed.incarnation())
@@ -111,7 +110,7 @@ class RestartReplayIT {
    */
   @Test
   void givenAQuietShard_whenTheCoordinatorRestarts_thenTheReplayedRosterStillHoldsIt()
-      throws IOException {
+      throws Exception {
     Path dataDir = Files.createTempDirectory(Path.of("target"), "quiet-shard-data");
     String sessionId = UUID.randomUUID().toString();
     String worked = Ids.method(CLASS_A, "worked");

@@ -78,7 +78,7 @@ class LeaseExpiryIT {
             .findFirst()
             .orElseThrow();
     assertThat(leasedTest.lease()).isNotNull();
-    assertThat(leasedTest.lease().shard()).isEqualTo(0);
+    assertThat(leasedTest.lease().shard()).isZero();
     assertThat(leasedTest.lease().fence()).isEqualTo(deadFence);
     assertThat(leasedTest.lease().expiresAt()).isNotNull();
 

@@ -82,8 +82,8 @@ class SessionLoopIT {
     String sessionId = UUID.randomUUID().toString();
     RegisterResponse first = client.register(sessionId, registration(0, 1));
     RegisterResponse second = client.register(sessionId, registration(1, 1));
-    assertThat(first.epoch()).isEqualTo(1);
-    assertThat(second.epoch()).isEqualTo(1);
+    assertThat(first.epoch()).isOne();
+    assertThat(second.epoch()).isOne();
     assertThat(second.registeredCount()).isEqualTo(5);
 
     ClaimResponse alphaByShard0 =

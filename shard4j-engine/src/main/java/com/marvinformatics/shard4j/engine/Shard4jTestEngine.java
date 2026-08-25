@@ -63,7 +63,7 @@ public class Shard4jTestEngine implements TestEngine {
               .toList();
       root.addChild(
           jupiter.discoverIds(
-              ids, request.getConfigurationParameters(), request.getOutputDirectoryProvider()));
+              ids, request.getConfigurationParameters(), request.getOutputDirectoryCreator()));
       return root;
     }
     Shard4jEngineDescriptor root =

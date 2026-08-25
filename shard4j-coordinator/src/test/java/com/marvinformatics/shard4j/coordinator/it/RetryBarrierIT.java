@@ -179,8 +179,7 @@ class RetryBarrierIT {
             .findFirst()
             .orElseThrow();
     assertThat(retryRecord.shard())
-        .as("the straggler's failure must rebalance to the shard that was held back")
-        .isEqualTo(0);
+        .as("the straggler's failure must rebalance to the shard that was held back").isZero();
     assertThat(retryRecord.outcome()).isEqualTo(Outcome.PASSED);
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
   }

@@ -5,8 +5,8 @@ import java.util.Map;
 import lombok.experimental.UtilityClass;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
+import org.junit.platform.engine.OutputDirectoryCreator;
 import org.junit.platform.engine.TestDescriptor;
-import org.junit.platform.engine.reporting.OutputDirectoryProvider;
 import org.junit.platform.engine.support.descriptor.EngineDescriptor;
 import org.junit.platform.engine.support.store.Namespace;
 import org.junit.platform.engine.support.store.NamespacedHierarchicalStore;
@@ -21,13 +21,13 @@ class EngineTestHarness {
         new EngineDescriptor(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID), "outer"),
         listener,
         new MapConfigurationParameters(Map.of()),
-        outputDirectoryProvider(),
+        outputDirectoryCreator(),
         new NamespacedHierarchicalStore<Namespace>(
             new NamespacedHierarchicalStore<Namespace>(null)));
   }
 
-  OutputDirectoryProvider outputDirectoryProvider() {
-    return new OutputDirectoryProvider() {
+  OutputDirectoryCreator outputDirectoryCreator() {
+    return new OutputDirectoryCreator() {
       @Override
       public Path getRootDirectory() {
         return Path.of("target");

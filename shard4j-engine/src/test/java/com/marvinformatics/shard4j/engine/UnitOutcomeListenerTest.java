@@ -41,7 +41,7 @@ class UnitOutcomeListenerTest {
         jupiter.discoverIds(
             leased.stream().toList(),
             new MapConfigurationParameters(Map.of()),
-            EngineTestHarness.outputDirectoryProvider());
+            EngineTestHarness.outputDirectoryCreator());
     Map<String, UnitResult> results = new HashMap<>();
     UnitOutcomeListener listener =
         new UnitOutcomeListener(
@@ -134,7 +134,7 @@ class UnitOutcomeListenerTest {
         jupiter.discoverIds(
             leased.stream().toList(),
             new MapConfigurationParameters(Map.of()),
-            EngineTestHarness.outputDirectoryProvider());
+            EngineTestHarness.outputDirectoryCreator());
     Map<String, UnitResult> results = new HashMap<>();
     UnitOutcomeListener listener =
         new UnitOutcomeListener(
