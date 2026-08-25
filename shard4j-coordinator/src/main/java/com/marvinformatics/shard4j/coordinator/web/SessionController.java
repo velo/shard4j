@@ -1,6 +1,8 @@
 package com.marvinformatics.shard4j.coordinator.web;
 
 import com.marvinformatics.shard4j.coordinator.core.CoordinatorCore;
+import com.marvinformatics.shard4j.protocol.BarrierRequest;
+import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -48,6 +50,12 @@ public class SessionController {
   @PostMapping("/sessions/{sessionId}/nack")
   public NackResponse nack(@PathVariable String sessionId, @RequestBody NackRequest request) {
     return core.nack(sessionId, request);
+  }
+
+  @PostMapping("/sessions/{sessionId}/barrier")
+  public BarrierResponse barrier(
+      @PathVariable String sessionId, @RequestBody BarrierRequest request) {
+    return core.barrier(sessionId, request);
   }
 
   @PostMapping("/sessions/{sessionId}/depart")

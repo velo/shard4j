@@ -74,7 +74,7 @@ class ForgottenSessionIT {
                 .status())
         .isEqualTo(404);
     assertThat(
-            client.departRaw(sessionId, new DepartRequest(0)).status())
+            client.departRaw(sessionId, new DepartRequest(0, 1)).status())
         .isEqualTo(404);
 
     assertThat(client.viewRaw(sessionId).status())

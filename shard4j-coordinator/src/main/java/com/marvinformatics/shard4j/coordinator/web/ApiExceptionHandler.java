@@ -2,6 +2,7 @@ package com.marvinformatics.shard4j.coordinator.web;
 
 import com.marvinformatics.shard4j.coordinator.core.ProtocolViolationException;
 import com.marvinformatics.shard4j.coordinator.core.RegistrationMismatchException;
+import com.marvinformatics.shard4j.coordinator.core.StaleEpochException;
 import com.marvinformatics.shard4j.coordinator.core.StaleFenceException;
 import com.marvinformatics.shard4j.coordinator.core.UnknownSessionException;
 import com.marvinformatics.shard4j.coordinator.core.UnregisteredTestException;
@@ -37,6 +38,11 @@ public class ApiExceptionHandler {
 
   @ExceptionHandler(UnregisteredTestException.class)
   public ResponseEntity<Map<String, String>> unregisteredTest(UnregisteredTestException e) {
+    return error(HttpStatus.CONFLICT, e);
+  }
+
+  @ExceptionHandler(StaleEpochException.class)
+  public ResponseEntity<Map<String, String>> staleEpoch(StaleEpochException e) {
     return error(HttpStatus.CONFLICT, e);
   }
 

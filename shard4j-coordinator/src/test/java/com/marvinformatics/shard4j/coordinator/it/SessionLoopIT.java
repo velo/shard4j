@@ -353,7 +353,7 @@ class SessionLoopIT {
     String done = Ids.method(ALPHA, "first");
     Fence fence = client.claimOne(sessionId, 0, done);
     client.result(sessionId, passed(0, done, fence, 800));
-    client.depart(sessionId, new DepartRequest(0));
+    client.depart(sessionId, new DepartRequest(0, 1));
 
     SessionView view = client.view(sessionId);
     assertThat(view.shards()).allMatch(SessionView.ShardView::departed);
