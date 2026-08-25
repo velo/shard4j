@@ -28,6 +28,9 @@ import org.junit.platform.engine.ConfigurationParameters;
  *     appear in {@code ps} output, in failsafe's argLine echo, and in crash dumps.
  * @param metadata forwarded verbatim as the registration metadata map
  * @param deadline absolute job-kill time; absent means no early self-release
+ * @param concurrency how many classes this shard drains at once; 1 keeps today's strictly
+ *     serial behaviour, and anything higher requires the consumer's classes to tolerate
+ *     running concurrently in one JVM
  */
 public record ShardConfiguration(
     boolean enabled,
@@ -37,6 +40,7 @@ public record ShardConfiguration(
     int shardIndex,
     Pass pass,
     int attempt,
+    int concurrency,
     Map<String, String> metadata,
     Duration retryBudget,
     Instant deadline,
@@ -50,6 +54,7 @@ public record ShardConfiguration(
   static final String SHARD_INDEX = "shard.index";
   static final String PASS = "shard.pass";
   static final String ATTEMPT = "shard.attempt";
+  static final String CONCURRENCY = "shard.concurrency";
   static final String METADATA_PREFIX = "shard.metadata.";
   static final String RETRY_BUDGET = "shard.coordinator.retry.budget";
   static final String DEADLINE = "shard.deadline";
@@ -66,7 +71,7 @@ public record ShardConfiguration(
     Resolver resolver = new Resolver(parameters, environment);
     if (!resolver.flag(ENABLED, false)) {
       return new ShardConfiguration(
-          false, null, null, null, -1, null, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+          false, null, null, null, -1, null, 1, 1, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
     }
     return new ShardConfiguration(
         true,
@@ -76,6 +81,7 @@ public record ShardConfiguration(
         resolver.requiredInt(SHARD_INDEX),
         resolver.pass(),
         resolver.attempt(),
+        resolver.concurrency(),
         resolver.metadata(),
         resolver.duration(RETRY_BUDGET, DEFAULT_RETRY_BUDGET),
         resolver.deadline(),
@@ -165,6 +171,23 @@ public record ShardConfiguration(
         return attempt;
       } catch (NumberFormatException e) {
         throw new ShardConfigurationException(ATTEMPT + " must be a positive integer, got: " + value);
+      }
+    }
+
+    private int concurrency() {
+      String value = value(CONCURRENCY);
+      if (value == null) {
+        return 1;
+      }
+      try {
+        int concurrency = Integer.parseInt(value);
+        if (concurrency < 1) {
+          throw new NumberFormatException();
+        }
+        return concurrency;
+      } catch (NumberFormatException e) {
+        throw new ShardConfigurationException(
+            CONCURRENCY + " must be a positive integer, got: " + value);
       }
     }
 

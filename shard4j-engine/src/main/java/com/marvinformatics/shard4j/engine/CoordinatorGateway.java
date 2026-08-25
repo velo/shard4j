@@ -36,8 +36,9 @@ import java.util.function.Supplier;
  * in the protocol, the retry budget carried by the transport layer below is the entire
  * availability story and must exceed the coordinator deployment's restart time.
  *
- * <p>All calls are serialised: the engine is single-threaded, and the one background
- * caller -- the liveness keepalive -- must not interleave with a re-registration.
+ * <p>All calls are serialised: the drain slots and the one background caller -- the
+ * liveness keepalive -- must not interleave with a re-registration, and a slot's report
+ * landing mid-way through another slot's ask would race the epoch this gateway carries.
  *
  * <p>Deliberately not final: the engine's own tests override single calls to inject the
  * transport failures -- an exhausted retry budget mid-batch -- that no healthy coordinator

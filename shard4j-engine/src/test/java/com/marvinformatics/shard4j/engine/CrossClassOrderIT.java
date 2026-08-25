@@ -130,6 +130,7 @@ class CrossClassOrderIT {
         0,
         Pass.MAIN,
         1,
+        1,
         Map.of(),
         Duration.ofSeconds(30),
         null,
