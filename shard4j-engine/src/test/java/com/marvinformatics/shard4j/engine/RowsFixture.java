@@ -11,7 +11,7 @@ class RowsFixture {
   @ParameterizedTest
   @ValueSource(strings = {"alpha", "broken", "gamma"})
   void rows(String value) {
-    if (value.equals("broken")) {
+    if ("broken".equals(value)) {
       fail("row rejected: " + value);
     }
   }

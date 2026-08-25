@@ -49,7 +49,7 @@ class ReflectiveCodecContractTest {
           .map(Path::toString)
           .filter(name -> name.endsWith(".class"))
           .map(name -> name.substring(0, name.length() - ".class".length()))
-          .filter(name -> !name.equals("package-info"))
+          .filter(name -> !"package-info".equals(name))
           .map(ReflectiveCodecContractTest::load)
           .flatMap(type -> Stream.concat(Stream.of(type), Stream.of(type.getDeclaredClasses())))
           .filter(type -> Modifier.isPublic(type.getModifiers()))

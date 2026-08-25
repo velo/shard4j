@@ -1,7 +1,7 @@
 package com.marvinformatics.shard4j.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,7 +28,6 @@ class ExecutionIdTest {
   @NullAndEmptySource
   @ValueSource(strings = {" ", "\t"})
   void refusesABlankId(String blank) {
-    assertThatExceptionOfType(IllegalArgumentException.class)
-        .isThrownBy(() -> new ExecutionId(blank));
+    assertThatThrownBy(() -> new ExecutionId(blank)).isInstanceOf(IllegalArgumentException.class);
   }
 }

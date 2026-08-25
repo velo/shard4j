@@ -83,6 +83,8 @@
     <rewrite-testing-frameworks.version>3.44.0</rewrite-testing-frameworks.version>
     <rewrite-migrate-java.version>3.42.1</rewrite-migrate-java.version>
     <rewrite-spring.version>6.37.1</rewrite-spring.version>
+    <rewrite-static-analysis.version>2.41.1</rewrite-static-analysis.version>
+    <rewrite-java-security.version>3.38.1</rewrite-java-security.version>
   </properties>
 
   <dependencyManagement>
@@ -211,20 +213,32 @@
                 <artifactId>rewrite-migrate-java</artifactId>
                 <version>${rewrite-migrate-java.version}</version>
               </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-static-analysis</artifactId>
+                <version>${rewrite-static-analysis.version}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-java-security</artifactId>
+                <version>${rewrite-java-security.version}</version>
+              </dependency>
             </dependencies>
 
             <executions>
-              <!-- The two executions differ only in which source set they touch, and
-                   that separation is load-bearing rather than cosmetic. `Assertj`
-                   chains in JUnit5BestPractices, which chains in UpgradeToJUnit514,
+              <!-- Only the JUnit-framework recipes are confined to the test sources, and
+                   that confinement is load-bearing rather than cosmetic. `Assertj` chains
+                   in JUnit5BestPractices, which chains in the JUnit Platform upgrade,
                    which renames `OutputDirectoryProvider` to `OutputDirectoryCreator`.
-                   shard4j-engine *implements* that Platform SPI in its main sources
-                   against the deliberately pinned 1.13, so letting the test recipes
-                   reach src/main/java rewrites the engine to an API that is not on its
-                   classpath and the build stops compiling. Merge these two and the
-                   engine breaks. -->
+                   shard4j-engine *implements* that Platform SPI in its main sources, so
+                   letting these recipes reach src/main/java rewrites the engine to an API
+                   its own classpath need not carry. Merge this execution into the next
+                   one and the engine stops compiling.
+
+                   Everything in the second execution is safe on any source file, so it is
+                   scoped to the whole module rather than split in two. -->
               <execution>
-                <id>tests</id>
+                <id>test-frameworks</id>
                 <goals>
                   <goal>runNoFork</goal>
                 </goals>
@@ -243,7 +257,6 @@
                     <recipe>org.openrewrite.java.testing.junit5.LifecycleNonPrivate</recipe>
                     <recipe>org.openrewrite.java.testing.junit5.TempDirNonFinal</recipe>
                     <recipe>org.openrewrite.java.testing.junit5.CleanupJUnitImports</recipe>
-                    <recipe>${rewrite.java.recipe}</recipe>
                   </activeRecipes>
                   <exclusions>
                     <exclusion>**/src/main/java/**</exclusion>
@@ -252,7 +265,7 @@
                 </configuration>
               </execution>
               <execution>
-                <id>sources</id>
+                <id>language-and-analysis</id>
                 <goals>
                   <goal>runNoFork</goal>
                 </goals>
@@ -261,9 +274,15 @@
                   <exportDatatables>true</exportDatatables>
                   <activeRecipes>
                     <recipe>${rewrite.java.recipe}</recipe>
+                    <recipe>org.openrewrite.staticanalysis.CommonStaticAnalysis</recipe>
+                    <!-- Finds nothing today, which is the point of keeping it: the engine
+                         and the coordinator both hold a shared secret and both speak HTTP,
+                         and this is where a permissive trust manager or a `new Random()`
+                         token would be caught. A standing guard, in the spirit of the
+                         forbiddenapis check. -->
+                    <recipe>org.openrewrite.java.security.JavaSecurityBestPractices</recipe>
                   </activeRecipes>
                   <exclusions>
-                    <exclusion>**/src/test/java/**</exclusion>
                     <exclusion>pom.xml</exclusion>
                   </exclusions>
                 </configuration>

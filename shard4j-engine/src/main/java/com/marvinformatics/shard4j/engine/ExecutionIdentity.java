@@ -33,7 +33,7 @@ public class ExecutionIdentity {
   /** The lease unit: the record id with a trailing invocation segment dropped. */
   public ExecutionId leaseId(TestDescriptor descriptor) {
     UniqueId wire = jupiterRooted(descriptor.getUniqueId());
-    if (wire.getLastSegment().getType().equals(INVOCATION_SEGMENT)) {
+    if (INVOCATION_SEGMENT.equals(wire.getLastSegment().getType())) {
       wire = wire.removeLastSegment();
     }
     return new ExecutionId(wire.toString());
@@ -53,16 +53,16 @@ public class ExecutionIdentity {
     List<Segment> segments = uniqueId.getSegments();
     int root = 0;
     while (root < segments.size()
-        && segments.get(root).getType().equals(ENGINE_SEGMENT)
-        && !segments.get(root).getValue().equals(JUPITER_ENGINE_ID)) {
+        && ENGINE_SEGMENT.equals(segments.get(root).getType())
+        && !JUPITER_ENGINE_ID.equals(segments.get(root).getValue())) {
       root++;
     }
-    if (root == segments.size() || !segments.get(root).getType().equals(ENGINE_SEGMENT)) {
+    if (root == segments.size() || !ENGINE_SEGMENT.equals(segments.get(root).getType())) {
       throw new IllegalArgumentException("Not a Jupiter-rooted unique id: " + uniqueId);
     }
     // The wire contract: after the engine root comes a class segment or nothing at all
     // (the engine node itself). Anything else is not an id this engine ever minted.
-    if (root + 1 < segments.size() && !segments.get(root + 1).getType().equals(CLASS_SEGMENT)) {
+    if (root + 1 < segments.size() && !CLASS_SEGMENT.equals(segments.get(root + 1).getType())) {
       throw new IllegalArgumentException(
           "A Jupiter-rooted id must start with [class: after its engine root: " + uniqueId);
     }
