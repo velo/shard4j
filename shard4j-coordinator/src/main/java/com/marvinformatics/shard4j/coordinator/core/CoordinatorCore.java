@@ -28,7 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import lombok.RequiredArgsConstructor;
+import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -41,11 +41,11 @@ import lombok.extern.slf4j.Slf4j;
  * under one request per second after that.
  */
 @Slf4j
-@RequiredArgsConstructor
 public final class CoordinatorCore {
 
   private static final String REQUIRED_ID_PREFIX = "[engine:junit-jupiter]/[class:";
   private static final int REASON_LIMIT = 500;
+  private static final long SPAN_SLACK_MS = 1_000;
 
   private final Object writeLock = new Object();
   private final Map<String, Session> sessions = new HashMap<>();
@@ -59,6 +59,31 @@ public final class CoordinatorCore {
   private final int maxClaimBatch;
   private final Duration gcIdle;
   private long seq;
+
+  // A builder rather than a nine-field positional constructor: two adjacent Durations make
+  // a silent transposition possible, and a field reorder would reorder the constructor and
+  // still compile.
+  @Builder
+  private CoordinatorCore(
+      SessionLog sessionLog,
+      HistoryLog historyLog,
+      DurationStore durations,
+      Clock clock,
+      String tenantKey,
+      long incarnation,
+      Duration leaseTtl,
+      int maxClaimBatch,
+      Duration gcIdle) {
+    this.sessionLog = sessionLog;
+    this.historyLog = historyLog;
+    this.durations = durations;
+    this.clock = clock;
+    this.tenantKey = tenantKey;
+    this.incarnation = incarnation;
+    this.leaseTtl = leaseTtl;
+    this.maxClaimBatch = maxClaimBatch;
+    this.gcIdle = gcIdle;
+  }
 
   public RegisterResponse register(String sessionId, RegisterRequest request) {
     validateCensus(request);
@@ -139,7 +164,7 @@ public final class CoordinatorCore {
       for (String testId : ordered.subList(0, Math.min(maxClaimBatch, ordered.size()))) {
         Fence fence = new Fence(session.epoch(), incarnation, ++seq);
         Instant expiresAt = now.plus(leaseTtl);
-        session.lease(testId, request.shard(), request.pass(), fence, expiresAt);
+        session.lease(testId, request.shard(), request.pass(), fence, now, expiresAt);
         granted.add(new Grant(testId, fence, expiresAt));
       }
       session.join(request.shard(), now);
@@ -187,6 +212,19 @@ public final class CoordinatorCore {
                 + " but the lease was granted for pass "
                 + lease.pass());
       }
+      // The lease-to-result span is a sanity bound on the engine-measured duration, not the
+      // measurement: under batched claims the span legitimately exceeds the duration, so
+      // only the impossible direction -- a duration longer than the lease was even held --
+      // is worth a line in the log.
+      long observedSpanMs = Duration.between(lease.grantedAt(), now).toMillis();
+      if (request.durationMs() > observedSpanMs + SPAN_SLACK_MS) {
+        log.warn(
+            "Result for {} reports {} ms but its lease was held for only {} ms;"
+                + " the engine-measured duration stays primary",
+            request.testId(),
+            request.durationMs(),
+            observedSpanMs);
+      }
       String reason = truncate(request.reason());
       sessionLog.append(
           LogRecord.unitCompletion(
@@ -213,7 +251,6 @@ public final class CoordinatorCore {
       if (request.outcome() == Outcome.PASSED) {
         durations.recordPassed(
             HistoryKeys.of(request.testId()), sessionId, request.durationMs(), request.firstOnShard());
-        durations.saveSnapshot();
       }
       return new ResultResponse(true, null);
     }
@@ -341,6 +378,14 @@ public final class CoordinatorCore {
     if (session != null) {
       session.recordNack(
           new NackRequest.NackedLease(record.testId(), null, record.reason()), record.ts());
+    }
+  }
+
+  /** The same idle rule the lazy path applies per lookup, in bulk, for the scheduler. */
+  public void gcIdleSessions() {
+    synchronized (writeLock) {
+      Instant now = clock.instant();
+      sessions.values().removeIf(session -> session.lastActivity().plus(gcIdle).isBefore(now));
     }
   }
 

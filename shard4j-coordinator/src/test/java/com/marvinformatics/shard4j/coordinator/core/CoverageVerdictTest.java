@@ -18,7 +18,7 @@ class CoverageVerdictTest {
   }
 
   private static SessionView.TestView test(String id, TestState state) {
-    return new SessionView.TestView(id, state, null, List.of());
+    return new SessionView.TestView(id, state, null, null, List.of());
   }
 
   @Test

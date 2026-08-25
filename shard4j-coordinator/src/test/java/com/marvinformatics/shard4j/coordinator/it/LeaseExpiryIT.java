@@ -70,6 +70,18 @@ class LeaseExpiryIT {
     Fence deadFence = silent.granted().get(0).fence();
     assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.LEASED);
 
+    // While LEASED, the read surface names the holder, the fence and the expiry -- the
+    // stranded-lease detail a human needs to see who is sitting on a unit.
+    SessionView.TestView leasedTest =
+        client.view(sessionId).tests().stream()
+            .filter(test -> test.testId().equals(testId))
+            .findFirst()
+            .orElseThrow();
+    assertThat(leasedTest.lease()).isNotNull();
+    assertThat(leasedTest.lease().shard()).isEqualTo(0);
+    assertThat(leasedTest.lease().fence()).isEqualTo(deadFence);
+    assertThat(leasedTest.lease().expiresAt()).isNotNull();
+
     // Immediately, before expiry, the unit is not claimable by anyone else.
     ClaimResponse tooSoon =
         client.claim(sessionId, new ClaimRequest(1, Pass.MAIN, CLASS_NAME, List.of(testId)));

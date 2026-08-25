@@ -14,9 +14,11 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,6 +47,8 @@ public final class DurationStore {
   private final Path snapshotFile;
   private final long clampMs;
   private final Map<String, List<Entry>> byKey = new HashMap<>();
+  private final Set<String> lowConfidenceFlagged = new HashSet<>();
+  private boolean dirty;
 
   public synchronized void recordPassed(
       HistoryKey key, String session, long durationMs, boolean firstOnShard) {
@@ -65,6 +69,7 @@ public final class DurationStore {
     while (entries.size() > SESSION_WINDOW) {
       entries.remove(0);
     }
+    dirty = true;
   }
 
   public synchronized OptionalLong estimate(HistoryKey key) {
@@ -75,6 +80,14 @@ public final class DurationStore {
     List<Long> rows =
         entries.stream().filter(entry -> !entry.firstOnShard()).map(Entry::durationMs).toList();
     if (rows.isEmpty()) {
+      // First-on-shard rows carry the per-JVM setup cost, so an estimate resting only on
+      // them is usable but low-confidence; say so once per key instead of silently.
+      if (lowConfidenceFlagged.add(key.value())) {
+        log.warn(
+            "Estimate for {} rests only on first-on-shard rows; low confidence until a"
+                + " non-first measurement lands",
+            key.value());
+      }
       rows = entries.stream().map(Entry::durationMs).toList();
     }
     List<Long> sorted = new ArrayList<>(rows);
@@ -110,8 +123,20 @@ public final class DurationStore {
       }
       Files.move(
           temp, snapshotFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      dirty = false;
     } catch (IOException | JacksonException e) {
       log.warn("Duration snapshot write failed: {}", e.toString());
+    }
+  }
+
+  /**
+   * The debounced entry point for the maintenance scheduler: a snapshot per PASSED result
+   * was a whole-store rewrite plus two fsyncs inside the write lock, for a file that is
+   * only a boot accelerator.
+   */
+  public synchronized void saveIfDirty() {
+    if (dirty) {
+      saveSnapshot();
     }
   }
 

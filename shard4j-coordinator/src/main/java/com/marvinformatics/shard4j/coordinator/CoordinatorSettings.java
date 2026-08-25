@@ -18,7 +18,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     independent deploys with an overlap window. The process must refuse to start when it
  *     is absent or empty, naming the variable. Compared in constant time, never logged,
  *     never echoed -- not in an error body, not at DEBUG, not in a startup banner. Log the
- *     count of accepted values and nothing else.
+ *     count of accepted values and nothing else. The variable is split on commas, so a
+ *     secret value must not contain one -- it would silently become two wrong values; a
+ *     blank entry after the split (the tell-tale of a stray comma) is a refused start.
  * @param tenantKey {@code COORDINATOR_TENANT_KEY}. Opaque: not parsed, not assumed to be
  *     owner/name, not assumed to be Git. The tenant is a property of this instance's
  *     configuration and is never client-supplied; the wire has no tenant field at all.
@@ -57,6 +59,12 @@ public record CoordinatorSettings(
           "Refusing to start: COORDINATOR_SECRETS is absent or empty."
               + " The coordinator never runs with authentication disabled;"
               + " set at least one accepted secret value.");
+    }
+    if (secrets.stream().anyMatch(String::isBlank)) {
+      throw new IllegalStateException(
+          "Refusing to start: COORDINATOR_SECRETS contains a blank entry -- usually a stray"
+              + " comma. The variable is split on commas, so a secret value must not"
+              + " contain one.");
     }
     if (tenantKey == null || tenantKey.isBlank()) {
       throw new IllegalStateException(

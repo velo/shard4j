@@ -8,6 +8,9 @@ import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
 import com.marvinformatics.shard4j.coordinator.web.SecretAuthFilter;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -72,19 +75,67 @@ public class CoordinatorWiring {
     sessionLog.prune(settings.gcIdle(), now);
     historyLog.prune(settings.historyRetention(), now);
     CoordinatorCore core =
-        new CoordinatorCore(
-            sessionLog,
-            historyLog,
-            durationStore,
-            clock,
-            settings.tenantKey(),
-            dataDirectory.incarnation(),
-            settings.leaseTtl(),
-            settings.maxClaimBatch(),
-            settings.gcIdle());
+        CoordinatorCore.builder()
+            .sessionLog(sessionLog)
+            .historyLog(historyLog)
+            .durations(durationStore)
+            .clock(clock)
+            .tenantKey(settings.tenantKey())
+            .incarnation(dataDirectory.incarnation())
+            .leaseTtl(settings.leaseTtl())
+            .maxClaimBatch(settings.maxClaimBatch())
+            .gcIdle(settings.gcIdle())
+            .build();
     core.replay(sessionLog.replay(settings.gcIdle(), now));
     log.info("Coordinator ready at incarnation {}", dataDirectory.incarnation());
     return core;
+  }
+
+  /**
+   * Boot-time pruning and idle GC alone are not enough for a long-lived process, and the
+   * duration snapshot is debounced out of the result path -- so both run here on a clock.
+   * Every task swallows its own failures: maintenance must never kill its executor.
+   */
+  @Bean(destroyMethod = "shutdownNow")
+  public ScheduledExecutorService maintenanceScheduler(
+      SessionLog sessionLog,
+      HistoryLog historyLog,
+      DurationStore durationStore,
+      CoordinatorCore core,
+      CoordinatorSettings settings) {
+    ScheduledExecutorService scheduler =
+        Executors.newSingleThreadScheduledExecutor(
+            runnable -> {
+              Thread thread = new Thread(runnable, "coordinator-maintenance");
+              thread.setDaemon(true);
+              return thread;
+            });
+    scheduler.scheduleWithFixedDelay(
+        () -> {
+          try {
+            Instant now = Clock.systemUTC().instant();
+            sessionLog.prune(settings.gcIdle(), now);
+            historyLog.prune(settings.historyRetention(), now);
+            core.gcIdleSessions();
+          } catch (RuntimeException e) {
+            log.warn("Scheduled maintenance failed; will retry next cycle: {}", e.toString());
+          }
+        },
+        1,
+        1,
+        TimeUnit.HOURS);
+    scheduler.scheduleWithFixedDelay(
+        () -> {
+          try {
+            durationStore.saveIfDirty();
+          } catch (RuntimeException e) {
+            log.warn("Duration snapshot flush failed; will retry next cycle: {}", e.toString());
+          }
+        },
+        30,
+        30,
+        TimeUnit.SECONDS);
+    return scheduler;
   }
 
   @Bean

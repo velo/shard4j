@@ -105,9 +105,10 @@ final class Session {
     };
   }
 
-  void lease(String testId, int shard, Pass pass, Fence fence, Instant expiresAt) {
+  void lease(
+      String testId, int shard, Pass pass, Fence fence, Instant grantedAt, Instant expiresAt) {
     UnitState unit = units.get(testId);
-    unit.lease = new Lease(shard, pass, fence, expiresAt, unit.state, unit.failedIn);
+    unit.lease = new Lease(shard, pass, fence, grantedAt, expiresAt, unit.state, unit.failedIn);
     unit.state = TestState.LEASED;
   }
 
@@ -204,6 +205,7 @@ final class Session {
                         entry.getKey(),
                         entry.getValue().state,
                         entry.getValue().reason,
+                        leaseViewOf(entry.getValue()),
                         List.copyOf(entry.getValue().records)))
             .toList();
     return new SessionView(
@@ -221,6 +223,12 @@ final class Session {
         staleResultsDropped);
   }
 
+  private static SessionView.LeaseView leaseViewOf(UnitState unit) {
+    return unit.lease == null
+        ? null
+        : new SessionView.LeaseView(unit.lease.shard(), unit.lease.fence(), unit.lease.expiresAt());
+  }
+
   private static final class UnitState {
     private TestState state = TestState.PENDING;
     private Pass failedIn;
@@ -230,7 +238,13 @@ final class Session {
   }
 
   record Lease(
-      int shard, Pass pass, Fence fence, Instant expiresAt, TestState origin, Pass originFailedIn) {}
+      int shard,
+      Pass pass,
+      Fence fence,
+      Instant grantedAt,
+      Instant expiresAt,
+      TestState origin,
+      Pass originFailedIn) {}
 
   private static final class ShardInfo {
     private boolean departed;
