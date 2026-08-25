@@ -18,6 +18,10 @@
   <properties>
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
+    <!-- Not published: nothing here to attach or sign for a release. -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
     <assertj.version>3.27.6</assertj.version>
     <testcontainers.version>1.21.3</testcontainers.version>
   </properties>
