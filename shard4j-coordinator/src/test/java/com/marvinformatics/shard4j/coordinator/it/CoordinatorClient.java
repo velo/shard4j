@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.marvinformatics.shard4j.protocol.BarrierRequest;
+import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -86,6 +88,12 @@ final class CoordinatorClient {
     @RequestLine("POST /sessions/{sessionId}/nack")
     Response nackRaw(@Param("sessionId") String sessionId, NackRequest request);
 
+    @RequestLine("POST /sessions/{sessionId}/barrier")
+    BarrierResponse barrier(@Param("sessionId") String sessionId, BarrierRequest request);
+
+    @RequestLine("POST /sessions/{sessionId}/barrier")
+    Response barrierRaw(@Param("sessionId") String sessionId, Object request);
+
     @RequestLine("POST /sessions/{sessionId}/depart")
     DepartResponse depart(@Param("sessionId") String sessionId, DepartRequest request);
 
@@ -150,6 +158,14 @@ final class CoordinatorClient {
 
   RawResponse nackRaw(String sessionId, NackRequest request) {
     return raw(api.nackRaw(sessionId, request));
+  }
+
+  BarrierResponse barrier(String sessionId, BarrierRequest request) {
+    return api.barrier(sessionId, request);
+  }
+
+  RawResponse barrierRaw(String sessionId, Object request) {
+    return raw(api.barrierRaw(sessionId, request));
   }
 
   DepartResponse depart(String sessionId, DepartRequest request) {

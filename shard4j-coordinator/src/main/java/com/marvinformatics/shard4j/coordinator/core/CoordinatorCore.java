@@ -4,6 +4,8 @@ import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
 import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
 import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
+import com.marvinformatics.shard4j.protocol.BarrierRequest;
+import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -14,6 +16,7 @@ import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
+import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -140,7 +143,7 @@ public final class CoordinatorCore {
               newEpoch);
         }
       }
-      session.join(request.shard(), now);
+      joinLogged(sessionId, session, request.shard(), now);
       return new RegisterResponse(session.epoch(), session.registeredCount());
     }
   }
@@ -149,11 +152,17 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      sweepSilentShards(sessionId, session, now);
       for (String candidate : request.candidates()) {
         if (!session.isRegistered(candidate)) {
           throw new UnregisteredTestException(candidate);
         }
+      }
+      // An early-released shard always receives an empty grant: released means the
+      // coordinator decided it is not needed, and a grant would un-decide that.
+      if (session.isReleased(request.shard())) {
+        session.touch(now);
+        return new ClaimResponse(List.of());
       }
       List<String> claimable =
           request.candidates().stream()
@@ -167,7 +176,7 @@ public final class CoordinatorCore {
         session.lease(testId, request.shard(), request.pass(), fence, now, expiresAt);
         granted.add(new Grant(testId, fence, expiresAt));
       }
-      session.join(request.shard(), now);
+      joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
   }
@@ -177,7 +186,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      sweepSilentShards(sessionId, session, now);
       if (!session.isRegistered(request.testId())) {
         throw new UnregisteredTestException(request.testId());
       }
@@ -260,7 +269,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      sweepSilentShards(sessionId, session, now);
       List<String> released = new ArrayList<>();
       List<String> rejected = new ArrayList<>();
       for (NackRequest.NackedLease lease : request.leases()) {
@@ -285,9 +294,67 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
+      if (request.epoch() != session.epoch()) {
+        throw new StaleEpochException(request.epoch(), session.epoch());
+      }
+      // Durable before memory, like every mutation: a crash between the two must find the
+      // departure on disk, never only in memory.
+      if (!session.hasDeparted(request.shard())) {
+        sessionLog.append(LogRecord.departed(tenantKey, sessionId, request.shard(), now));
+      }
       session.depart(request.shard());
       session.touch(now);
       return new DepartResponse(request.shard(), true);
+    }
+  }
+
+  /**
+   * The barrier: arrival is the pass-completion report, polled while waiting. The decision
+   * itself lives in the session; this method makes what it decides durable -- the pass
+   * watermark and any early release go through the completion log, because a restart that
+   * forgot either would re-grant work to a released shard or hold a quorum open for a
+   * shard that already finished.
+   */
+  public BarrierResponse barrier(String sessionId, BarrierRequest request) {
+    if (request.completedPass() == null) {
+      throw new ProtocolViolationException(
+          "completedPass is required; a barrier arrival is the pass-completion report");
+    }
+    synchronized (writeLock) {
+      Instant now = clock.instant();
+      Session session = requireSession(sessionId, now);
+      if (request.epoch() != session.epoch()) {
+        throw new StaleEpochException(request.epoch(), session.epoch());
+      }
+      sweepSilentShards(sessionId, session, now);
+      Pass completedSoFar = session.completedPassOf(request.shard());
+      if (completedSoFar == null || completedSoFar.ordinal() < request.completedPass().ordinal()) {
+        sessionLog.append(
+            LogRecord.passComplete(
+                tenantKey,
+                sessionId,
+                session.epoch(),
+                request.shard(),
+                request.completedPass(),
+                now));
+      }
+      session.completePass(request.shard(), request.completedPass(), now);
+      BarrierResponse decision = session.barrierDecision(request.shard(), request.completedPass());
+      // DONE after the final pass just means nothing is left; recording it as RELEASED
+      // would claim an early-release decision that was never made.
+      if (decision.action() == BarrierResponse.Action.DONE
+          && request.completedPass() != Pass.RETRY2
+          && !session.isReleased(request.shard())) {
+        sessionLog.append(
+            LogRecord.released(tenantKey, sessionId, session.epoch(), request.shard(), now));
+        session.release(request.shard());
+        log.info(
+            "Session {}: shard {} released after {}; it will claim nothing further",
+            sessionId,
+            request.shard(),
+            request.completedPass());
+      }
+      return decision;
     }
   }
 
@@ -295,7 +362,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      sweepSilentShards(sessionId, session, now);
       return session.view();
     }
   }
@@ -311,8 +378,12 @@ public final class CoordinatorCore {
       for (LogRecord record : records) {
         switch (record.type()) {
           case REGISTERED -> replayRegistered(record);
+          case JOINED -> replayJoined(record);
           case COMPLETION -> replayCompletion(record);
           case NACK -> replayNack(record);
+          case PASS_COMPLETE -> replayPassComplete(record);
+          case DEPARTED -> replayDeparted(record);
+          case RELEASED -> replayReleased(record);
         }
       }
       Instant now = clock.instant();
@@ -354,6 +425,13 @@ public final class CoordinatorCore {
     }
   }
 
+  private void replayJoined(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.join(record.shard(), record.ts());
+    }
+  }
+
   private void replayCompletion(LogRecord record) {
     Session session = sessions.get(record.session());
     if (session == null || !Boolean.TRUE.equals(record.unit())) {
@@ -379,6 +457,61 @@ public final class CoordinatorCore {
       session.recordNack(
           new NackRequest.NackedLease(record.testId(), null, record.reason()), record.ts());
     }
+  }
+
+  private void replayPassComplete(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.completePass(record.shard(), record.pass(), record.ts());
+    }
+  }
+
+  private void replayDeparted(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.depart(record.shard());
+    }
+  }
+
+  private void replayReleased(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.release(record.shard());
+    }
+  }
+
+  /**
+   * The silent-death detector, run before every decision. Lease expiry catches a shard
+   * that died mid-unit; the poll-silence sweep catches one that died holding nothing -- a
+   * waiter at a barrier has no lease for expiry to notice. Both mark the shard departed
+   * and log the departure so a restart does not resurrect the ghost into a barrier quorum.
+   * Quietly, because the sweep fires on read paths too -- and a lost record is not fatal:
+   * replay would revive the ghost from its COMPLETION records with no lease left to
+   * re-expire, but this same sweep re-departs it as soon as its silence exceeds the
+   * tolerance, so the cost is a slower INCOMPLETE, never a wedged fleet.
+   */
+  private void sweepSilentShards(String sessionId, Session session, Instant now) {
+    for (int shard : session.releaseExpiredLeases(now)) {
+      sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
+    }
+    for (int shard : session.departSilentShards(now)) {
+      sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
+    }
+
+  }
+
+  /**
+   * Joins are durable like departures, and for the same reason: a shard that registered
+   * but completed nothing before a restart would otherwise vanish from the replayed
+   * roster, and every quorum would resolve without it -- a premature RUN and zero
+   * rebalance for whatever it was still running. Logged only on the transition into the
+   * roster, since every claim re-joins.
+   */
+  private void joinLogged(String sessionId, Session session, int shard, Instant now) {
+    if (!session.hasJoined(shard)) {
+      sessionLog.append(LogRecord.joined(tenantKey, sessionId, session.epoch(), shard, now));
+    }
+    session.join(shard, now);
   }
 
   /** The same idle rule the lazy path applies per lookup, in bulk, for the scheduler. */
