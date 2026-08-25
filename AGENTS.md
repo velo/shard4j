@@ -181,19 +181,22 @@ confirmed the rule rather than the exception:
 
 ## Dependency updates
 
-Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` queues an
-auto-merge on each. Blanket auto-merge is only defensible because `build.yml` is the gate
--- module boundary, forbiddenapis, the coordinated failsafe profile against a live
+Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves each one
+and queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the
+gate -- module boundary, forbiddenapis, the coordinated failsafe profile against a live
 coordinator, and the container smoke test all run before anything merges.
 
-Two settings live in the repository rather than the tree, and the workflow is inert without
-them: "Allow auto-merge" is on, and `main` requires the three `build.yml` checks. Without
-the required checks, `--auto` degrades to merging on the spot rather than waiting for green.
+Three settings live in the repository rather than the tree. All three are set, and the
+workflow is inert or red without them:
 
-The workflow posts no approving review. `GITHUB_TOKEN` is refused with "GitHub Actions is
-not permitted to approve pull requests" unless the repository opts in, and `main` requires
-status checks rather than reviews, so an approval step would be ceremony that cannot
-succeed. Add one back only alongside a required-review rule.
+- **"Allow auto-merge"** on the repository, or the merge step fails outright.
+- **`main` requires the three `build.yml` checks.** Without them `--auto` degrades to
+  merging on the spot rather than waiting for green, which removes the safety argument the
+  whole arrangement rests on.
+- **"Allow GitHub Actions to create and approve pull requests"** (Settings -> Actions ->
+  General), or the approve step fails with "GitHub Actions is not permitted to approve pull
+  requests". `github-actions[bot]` approving `dependabot[bot]` is two distinct identities,
+  which is what makes it permissible; a token approving its own PR still would not be.
 
 `org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
 They are what set the engine's release-17 floor, and a bot must not be the thing that moves
