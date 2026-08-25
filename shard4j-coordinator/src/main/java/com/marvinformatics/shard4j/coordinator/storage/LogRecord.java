@@ -41,7 +41,10 @@ public record LogRecord(
   public enum Type {
     REGISTERED,
     COMPLETION,
-    NACK
+    NACK,
+    PASS_COMPLETE,
+    DEPARTED,
+    RELEASED
   }
 
   public static LogRecord registered(
@@ -131,6 +134,43 @@ public record LogRecord(
         .shard(shard)
         .testId(testId)
         .reason(reason)
+        .ts(ts)
+        .build();
+  }
+
+  /** Barrier arrival: the shard's report that it finished {@code pass}. */
+  public static LogRecord passComplete(
+      String project, String session, long epoch, int shard, Pass pass, Instant ts) {
+    return LogRecord.builder()
+        .type(Type.PASS_COMPLETE)
+        .project(project)
+        .session(session)
+        .epoch(epoch)
+        .shard(shard)
+        .pass(pass)
+        .ts(ts)
+        .build();
+  }
+
+  public static LogRecord departed(String project, String session, int shard, Instant ts) {
+    return LogRecord.builder()
+        .type(Type.DEPARTED)
+        .project(project)
+        .session(session)
+        .shard(shard)
+        .ts(ts)
+        .build();
+  }
+
+  /** Early release: the coordinator decided this shard is not needed for retry work. */
+  public static LogRecord released(
+      String project, String session, long epoch, int shard, Instant ts) {
+    return LogRecord.builder()
+        .type(Type.RELEASED)
+        .project(project)
+        .session(session)
+        .epoch(epoch)
+        .shard(shard)
         .ts(ts)
         .build();
   }

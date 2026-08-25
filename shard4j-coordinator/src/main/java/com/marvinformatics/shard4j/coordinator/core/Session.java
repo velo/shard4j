@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
+import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;
@@ -27,6 +28,9 @@ final class Session {
   // diagnostic, so beyond the cap only the count survives -- enough to show the flood
   // happened without letting it eat the heap.
   private static final int DIAGNOSTIC_CAP = 100;
+
+  // The poll cadence the design fixes for a shard waiting at a barrier.
+  private static final int RETRY_AFTER_SECONDS = 5;
 
   @Getter private final String id;
   @Getter private final String testSetHash;
@@ -75,8 +79,11 @@ final class Session {
     touch(now);
   }
 
-  void depart(int shard) {
-    shards.computeIfAbsent(shard, index -> new ShardInfo()).departed = true;
+  boolean depart(int shard) {
+    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    boolean newlyDeparted = !info.departed;
+    info.departed = true;
+    return newlyDeparted;
   }
 
   /**
@@ -94,6 +101,13 @@ final class Session {
         unit.lease = null;
       }
     }
+    // The previous attempt's shards are known-dead and its barriers never resolve; the new
+    // attempt's shards re-join with a clean watermark and no early release.
+    for (ShardInfo info : shards.values()) {
+      info.departed = true;
+      info.completedPass = null;
+      info.released = false;
+    }
   }
 
   boolean claimableIn(String testId, Pass pass) {
@@ -103,6 +117,125 @@ final class Session {
       case RETRY1 -> unit.state == TestState.FAILED && unit.failedIn == Pass.MAIN;
       case RETRY2 -> unit.state == TestState.FAILED && unit.failedIn == Pass.RETRY1;
     };
+  }
+
+  Pass completedPassOf(int shard) {
+    ShardInfo info = shards.get(shard);
+    return info == null ? null : info.completedPass;
+  }
+
+  void completePass(int shard, Pass pass, Instant now) {
+    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    info.departed = false;
+    if (info.completedPass == null || info.completedPass.ordinal() < pass.ordinal()) {
+      info.completedPass = pass;
+    }
+    touch(now);
+  }
+
+  boolean isReleased(int shard) {
+    ShardInfo info = shards.get(shard);
+    return info != null && info.released;
+  }
+
+  void release(int shard) {
+    shards.computeIfAbsent(shard, index -> new ShardInfo()).released = true;
+  }
+
+  /**
+   * The barrier answer for a shard that finished {@code completedPass}. Three counts drive
+   * it: units already failed into the asker's next pool, units that may yet land there
+   * (leased, or claimable in a pass some live shard has not finished), and shards waiting
+   * at this same barrier. The next pass runs only once every live undeparted shard has
+   * finished the current one -- the first finisher must not drain an empty failure pool and
+   * leave the straggler retrying its own failures alone -- and a shard is released the
+   * moment it cannot be needed, so a barrier never costs the fleet the slowest shard's
+   * wall time for nothing. Pure decision: the caller persists and applies a release.
+   */
+  BarrierResponse barrierDecision(int shard, Pass completedPass) {
+    if (isReleased(shard)) {
+      return done();
+    }
+    Pass nextPass = nextOf(completedPass);
+    if (nextPass == null) {
+      return done();
+    }
+    int retryPool = 0;
+    int mayStillFail = 0;
+    Instant earliestLeaseExpiry = null;
+    for (UnitState unit : units.values()) {
+      if (unit.state == TestState.LEASED) {
+        mayStillFail++;
+        Instant expiresAt = unit.lease.expiresAt();
+        if (earliestLeaseExpiry == null || expiresAt.isBefore(earliestLeaseExpiry)) {
+          earliestLeaseExpiry = expiresAt;
+        }
+        continue;
+      }
+      Pass pool = claimablePoolOf(unit);
+      if (pool == nextPass) {
+        retryPool++;
+      } else if (pool != null && someLiveShardStillReaches(pool)) {
+        mayStillFail++;
+      }
+    }
+    int waiting =
+        (int)
+            shards.values().stream()
+                .filter(info -> !info.departed && !info.released && info.completedPass == completedPass)
+                .count();
+    if (retryPool + mayStillFail == 0 || waiting > retryPool + mayStillFail) {
+      return done();
+    }
+    boolean quorumMet =
+        shards.values().stream()
+            .filter(info -> !info.departed)
+            .allMatch(
+                info ->
+                    info.completedPass != null
+                        && info.completedPass.ordinal() >= completedPass.ordinal());
+    if (quorumMet && retryPool > 0) {
+      return new BarrierResponse(BarrierResponse.Action.RUN, null, null);
+    }
+    return new BarrierResponse(BarrierResponse.Action.WAIT, RETRY_AFTER_SECONDS, earliestLeaseExpiry);
+  }
+
+  /** The pass that could still claim this unit, or null when no pool will ever hold it. */
+  private static Pass claimablePoolOf(UnitState unit) {
+    if (unit.state == TestState.PENDING) {
+      return Pass.MAIN;
+    }
+    if (unit.state == TestState.FAILED) {
+      return nextOf(unit.failedIn);
+    }
+    return null;
+  }
+
+  /**
+   * A unit claimable in {@code pool} may yet be run -- and may yet fail -- only while some
+   * live, unreleased shard has not moved past that pass. Once every live shard is beyond
+   * it, the unit is stranded: it can never enter a retry pool and must not hold a barrier.
+   */
+  private boolean someLiveShardStillReaches(Pass pool) {
+    return shards.values().stream()
+        .filter(info -> !info.departed && !info.released)
+        .anyMatch(
+            info -> {
+              Pass current = info.completedPass == null ? Pass.MAIN : nextOf(info.completedPass);
+              return current != null && current.ordinal() <= pool.ordinal();
+            });
+  }
+
+  private static Pass nextOf(Pass pass) {
+    return switch (pass) {
+      case MAIN -> Pass.RETRY1;
+      case RETRY1 -> Pass.RETRY2;
+      case RETRY2 -> null;
+    };
+  }
+
+  private static BarrierResponse done() {
+    return new BarrierResponse(BarrierResponse.Action.DONE, null, null);
   }
 
   void lease(
@@ -119,13 +252,17 @@ final class Session {
    * stranded session can never be diagnosed as INCOMPLETE. A holder that was merely slow
    * rejoins on its next claim.
    */
-  void releaseExpiredLeases(Instant now) {
+  List<Integer> releaseExpiredLeases(Instant now) {
+    List<Integer> newlyDeparted = new ArrayList<>();
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.LEASED && !unit.lease.expiresAt().isAfter(now)) {
-        shards.computeIfAbsent(unit.lease.shard(), index -> new ShardInfo()).departed = true;
+        if (depart(unit.lease.shard())) {
+          newlyDeparted.add(unit.lease.shard());
+        }
         restore(unit);
       }
     }
+    return newlyDeparted;
   }
 
   Fence currentFence(String testId) {
@@ -249,5 +386,7 @@ final class Session {
   private static final class ShardInfo {
     private boolean departed;
     private int completed;
+    private Pass completedPass;
+    private boolean released;
   }
 }

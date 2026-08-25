@@ -4,6 +4,8 @@ import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
 import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
 import com.marvinformatics.shard4j.coordinator.storage.SessionLog;
+import com.marvinformatics.shard4j.protocol.BarrierRequest;
+import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
@@ -14,6 +16,7 @@ import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
+import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -149,11 +152,17 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      expireLeases(sessionId, session, now);
       for (String candidate : request.candidates()) {
         if (!session.isRegistered(candidate)) {
           throw new UnregisteredTestException(candidate);
         }
+      }
+      // An early-released shard always receives an empty grant: released means the
+      // coordinator decided it is not needed, and a grant would un-decide that.
+      if (session.isReleased(request.shard())) {
+        session.touch(now);
+        return new ClaimResponse(List.of());
       }
       List<String> claimable =
           request.candidates().stream()
@@ -177,7 +186,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      expireLeases(sessionId, session, now);
       if (!session.isRegistered(request.testId())) {
         throw new UnregisteredTestException(request.testId());
       }
@@ -260,7 +269,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      expireLeases(sessionId, session, now);
       List<String> released = new ArrayList<>();
       List<String> rejected = new ArrayList<>();
       for (NackRequest.NackedLease lease : request.leases()) {
@@ -285,9 +294,55 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.depart(request.shard());
+      if (session.depart(request.shard())) {
+        sessionLog.append(LogRecord.departed(tenantKey, sessionId, request.shard(), now));
+      }
       session.touch(now);
       return new DepartResponse(request.shard(), true);
+    }
+  }
+
+  /**
+   * The barrier: arrival is the pass-completion report, polled while waiting. The decision
+   * itself lives in the session; this method makes what it decides durable -- the pass
+   * watermark and any early release go through the completion log, because a restart that
+   * forgot either would re-grant work to a released shard or hold a quorum open for a
+   * shard that already finished.
+   */
+  public BarrierResponse barrier(String sessionId, BarrierRequest request) {
+    if (request.completedPass() == null) {
+      throw new ProtocolViolationException(
+          "completedPass is required; a barrier arrival is the pass-completion report");
+    }
+    synchronized (writeLock) {
+      Instant now = clock.instant();
+      Session session = requireSession(sessionId, now);
+      expireLeases(sessionId, session, now);
+      Pass completedSoFar = session.completedPassOf(request.shard());
+      if (completedSoFar == null || completedSoFar.ordinal() < request.completedPass().ordinal()) {
+        sessionLog.append(
+            LogRecord.passComplete(
+                tenantKey,
+                sessionId,
+                session.epoch(),
+                request.shard(),
+                request.completedPass(),
+                now));
+      }
+      session.completePass(request.shard(), request.completedPass(), now);
+      BarrierResponse decision = session.barrierDecision(request.shard(), request.completedPass());
+      if (decision.action() == BarrierResponse.Action.DONE
+          && !session.isReleased(request.shard())) {
+        sessionLog.append(
+            LogRecord.released(tenantKey, sessionId, session.epoch(), request.shard(), now));
+        session.release(request.shard());
+        log.info(
+            "Session {}: shard {} released after {}; it will claim nothing further",
+            sessionId,
+            request.shard(),
+            request.completedPass());
+      }
+      return decision;
     }
   }
 
@@ -295,7 +350,7 @@ public final class CoordinatorCore {
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
-      session.releaseExpiredLeases(now);
+      expireLeases(sessionId, session, now);
       return session.view();
     }
   }
@@ -313,6 +368,9 @@ public final class CoordinatorCore {
           case REGISTERED -> replayRegistered(record);
           case COMPLETION -> replayCompletion(record);
           case NACK -> replayNack(record);
+          case PASS_COMPLETE -> replayPassComplete(record);
+          case DEPARTED -> replayDeparted(record);
+          case RELEASED -> replayReleased(record);
         }
       }
       Instant now = clock.instant();
@@ -378,6 +436,39 @@ public final class CoordinatorCore {
     if (session != null) {
       session.recordNack(
           new NackRequest.NackedLease(record.testId(), null, record.reason()), record.ts());
+    }
+  }
+
+  private void replayPassComplete(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.completePass(record.shard(), record.pass(), record.ts());
+    }
+  }
+
+  private void replayDeparted(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.depart(record.shard());
+    }
+  }
+
+  private void replayReleased(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.release(record.shard());
+    }
+  }
+
+  /**
+   * Expiry doubles as the silent-death detector: the holder is marked departed, and that
+   * departure is logged so a restart does not resurrect the ghost into a barrier quorum.
+   * Quietly, because expiry fires on read paths too and losing the record only costs a
+   * slower INCOMPLETE after a restart, never a wrong verdict.
+   */
+  private void expireLeases(String sessionId, Session session, Instant now) {
+    for (int shard : session.releaseExpiredLeases(now)) {
+      sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
     }
   }
 
