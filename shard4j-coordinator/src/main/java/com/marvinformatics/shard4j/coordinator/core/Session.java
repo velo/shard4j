@@ -98,6 +98,11 @@ final class Session {
     info.explicitlyDeparted = true;
   }
 
+  boolean hasJoined(int shard) {
+    ShardInfo info = shards.get(shard);
+    return info != null && !info.departed;
+  }
+
   boolean hasDeparted(int shard) {
     ShardInfo info = shards.get(shard);
     return info != null && info.departed;
@@ -401,7 +406,11 @@ final class Session {
             .map(
                 entry ->
                     new SessionView.ShardView(
-                        entry.getKey(), entry.getValue().departed, entry.getValue().completed))
+                        entry.getKey(),
+                        entry.getValue().departed,
+                        entry.getValue().completed,
+                        entry.getValue().completedPass,
+                        entry.getValue().released))
             .toList();
     List<SessionView.TestView> testViews =
         units.entrySet().stream()

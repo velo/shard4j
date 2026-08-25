@@ -103,4 +103,48 @@ class RestartReplayIT {
     }
   }
 
+  /**
+   * A quiet shard -- registered, but with no completion or pass record yet -- must survive
+   * replay in the roster: were it forgotten, every quorum would resolve without it and the
+   * next barrier would answer RUN prematurely, handing out retry work while the quiet
+   * shard's main pass is still running.
+   */
+  @Test
+  void givenAQuietShard_whenTheCoordinatorRestarts_thenTheReplayedRosterStillHoldsIt()
+      throws IOException {
+    Path dataDir = Files.createTempDirectory(Path.of("target"), "quiet-shard-data");
+    String sessionId = UUID.randomUUID().toString();
+    String worked = Ids.method(CLASS_A, "worked");
+    String pending = Ids.method(CLASS_A, "stillPending");
+    List<String> census = List.of(worked, pending);
+
+    GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      first.start();
+      CoordinatorClient client = new CoordinatorClient(first);
+      client.register(
+          sessionId, new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+      client.register(
+          sessionId, new RegisterRequest(1, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+      Fence fence = client.claimOne(sessionId, 0, worked);
+      client.result(
+          sessionId,
+          new ResultRequest(0, Pass.MAIN, worked, fence, Outcome.PASSED, 500, false, null, null));
+      first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
+    } finally {
+      first.stop();
+    }
+
+    GenericContainer<?> second = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      second.start();
+      CoordinatorClient client = new CoordinatorClient(second);
+      assertThat(
+              client.view(sessionId).shards().stream().map(SessionView.ShardView::shard).toList())
+          .containsExactly(0, 1);
+    } finally {
+      second.stop();
+    }
+  }
+
 }

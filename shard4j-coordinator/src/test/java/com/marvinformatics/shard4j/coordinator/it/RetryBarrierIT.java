@@ -137,8 +137,17 @@ class RetryBarrierIT {
     shard0.setUncaughtExceptionHandler((thread, failure) -> shardFailure.set(failure));
     shard0.start();
 
-    // Let shard 0 finish its main pass and start polling the barrier.
-    Thread.sleep(1_500);
+    // Shard 0 must have finished main and arrived at the barrier before the straggler's
+    // failure lands; its watermark on the session view is the observable proof, where a
+    // fixed sleep would only be a guess about scheduler speed.
+    Instant watermarkDeadline = Instant.now().plusSeconds(30);
+    while (client.view(sessionId).shards().stream()
+        .noneMatch(shard -> shard.shard() == 0 && shard.completedPass() != null)) {
+      if (Instant.now().isAfter(watermarkDeadline)) {
+        throw new AssertionError("Timed out waiting for shard 0 to arrive at the MAIN barrier");
+      }
+      Thread.sleep(100);
+    }
     client.result(sessionId, result(1, Pass.MAIN, flaky, flakyFence, Outcome.FAILED));
 
     // The straggler's arrival completes the quorum and makes it surplus (two shards, one

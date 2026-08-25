@@ -28,7 +28,9 @@ public record SessionView(
     int nacksDropped,
     int staleResultsDropped) {
 
-  public record ShardView(int shard, boolean departed, int completed) {}
+  /** {@code completedPass} is the shard's barrier watermark, null before its first arrival. */
+  public record ShardView(
+      int shard, boolean departed, int completed, Pass completedPass, boolean released) {}
 
   /** {@code lease} is present exactly while the unit is LEASED, and null otherwise. */
   public record TestView(

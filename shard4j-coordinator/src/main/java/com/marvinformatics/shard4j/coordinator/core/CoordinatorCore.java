@@ -143,7 +143,7 @@ public final class CoordinatorCore {
               newEpoch);
         }
       }
-      session.join(request.shard(), now);
+      joinLogged(sessionId, session, request.shard(), now);
       return new RegisterResponse(session.epoch(), session.registeredCount());
     }
   }
@@ -176,7 +176,7 @@ public final class CoordinatorCore {
         session.lease(testId, request.shard(), request.pass(), fence, now, expiresAt);
         granted.add(new Grant(testId, fence, expiresAt));
       }
-      session.join(request.shard(), now);
+      joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
   }
@@ -340,7 +340,10 @@ public final class CoordinatorCore {
       }
       session.completePass(request.shard(), request.completedPass(), now);
       BarrierResponse decision = session.barrierDecision(request.shard(), request.completedPass());
+      // DONE after the final pass just means nothing is left; recording it as RELEASED
+      // would claim an early-release decision that was never made.
       if (decision.action() == BarrierResponse.Action.DONE
+          && request.completedPass() != Pass.RETRY2
           && !session.isReleased(request.shard())) {
         sessionLog.append(
             LogRecord.released(tenantKey, sessionId, session.epoch(), request.shard(), now));
@@ -375,6 +378,7 @@ public final class CoordinatorCore {
       for (LogRecord record : records) {
         switch (record.type()) {
           case REGISTERED -> replayRegistered(record);
+          case JOINED -> replayJoined(record);
           case COMPLETION -> replayCompletion(record);
           case NACK -> replayNack(record);
           case PASS_COMPLETE -> replayPassComplete(record);
@@ -418,6 +422,13 @@ public final class CoordinatorCore {
     if (record.attempt() > session.attempt()) {
       session.bumpEpoch(record.attempt(), record.epoch());
       session.touch(record.ts());
+    }
+  }
+
+  private void replayJoined(LogRecord record) {
+    Session session = sessions.get(record.session());
+    if (session != null) {
+      session.join(record.shard(), record.ts());
     }
   }
 
@@ -487,6 +498,20 @@ public final class CoordinatorCore {
       sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
     }
 
+  }
+
+  /**
+   * Joins are durable like departures, and for the same reason: a shard that registered
+   * but completed nothing before a restart would otherwise vanish from the replayed
+   * roster, and every quorum would resolve without it -- a premature RUN and zero
+   * rebalance for whatever it was still running. Logged only on the transition into the
+   * roster, since every claim re-joins.
+   */
+  private void joinLogged(String sessionId, Session session, int shard, Instant now) {
+    if (!session.hasJoined(shard)) {
+      sessionLog.append(LogRecord.joined(tenantKey, sessionId, session.epoch(), shard, now));
+    }
+    session.join(shard, now);
   }
 
   /** The same idle rule the lazy path applies per lookup, in bulk, for the scheduler. */

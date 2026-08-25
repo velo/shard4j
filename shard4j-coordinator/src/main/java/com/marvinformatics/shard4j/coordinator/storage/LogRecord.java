@@ -40,6 +40,7 @@ public record LogRecord(
 
   public enum Type {
     REGISTERED,
+    JOINED,
     COMPLETION,
     NACK,
     PASS_COMPLETE,
@@ -148,6 +149,23 @@ public record LogRecord(
         .epoch(epoch)
         .shard(shard)
         .pass(pass)
+        .ts(ts)
+        .build();
+  }
+
+  /**
+   * A shard entering, or re-entering, the roster. Without it a shard that registered but
+   * produced no completion or pass record would vanish from the replayed roster, and every
+   * quorum would resolve without it.
+   */
+  public static LogRecord joined(
+      String project, String session, long epoch, int shard, Instant ts) {
+    return LogRecord.builder()
+        .type(Type.JOINED)
+        .project(project)
+        .session(session)
+        .epoch(epoch)
+        .shard(shard)
         .ts(ts)
         .build();
   }
