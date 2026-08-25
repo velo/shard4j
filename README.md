@@ -101,7 +101,14 @@ intervals is presumed dead and dropped from barrier quorums. The engine honours 
 second rule with a background keepalive that pings an empty claim every five seconds for
 the whole of `execute()`, covering the gaps a real suite has -- a slow `@AfterAll`
 between classes, a long class setup before the first result -- where it would otherwise
-be silent while holding nothing.
+be silent while holding nothing. That coverage stops at the edges of `execute()`: between
+the per-pass executions the shard is a JVM tearing down and a fresh fork spinning up --
+classpath scan, discovery of the next pass -- holding no lease and sending nothing, and on
+a large consumer classpath that gap can outlast the coordinator's 15-second presumed-death
+tolerance. The consequence is a premature presumed death: a degraded rebalance that
+self-heals on the shard's next call, so the outcome is red or correct, never a false
+green. The engine cannot close this gap, because the shard genuinely is not running
+during it.
 
 ## Deployment
 
@@ -144,6 +151,8 @@ not-yet-claimed classes first, using durations measured on earlier runs; a test 
 history is ordered by a hash of its identity, so the schedule stays deterministic without
 being alphabetical. Every claim is a lease with an expiry and a fence, so a shard that
 stalls or dies loses its work back to the queue instead of taking the run down with it.
+Draining a class grants all of its leases up front, so the lease TTL must cover a shard's
+slowest class share, not merely its slowest single test.
 
 Retries are additional passes over the session, not in-place re-runs: a failure leaves the
 test claimable again in the next pass, on whichever shard asks first, and there are at
