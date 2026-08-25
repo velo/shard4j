@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
 
@@ -51,7 +52,7 @@ final class ShardLoop {
   private final CoordinatorGateway gateway;
   private final ExecutionRequest request;
 
-  private final Map<String, Grant> reconciliation = new LinkedHashMap<>();
+  private final LeaseLedger ledger = new LeaseLedger();
   private final Map<String, Outcome> outcomes =
       Collections.synchronizedMap(new LinkedHashMap<>());
 
@@ -112,29 +113,22 @@ final class ShardLoop {
   /**
    * Returns every still-outstanding lease to the pool, naming the cause. Reached from
    * three places -- the mid-pass failure path, the SIGTERM shutdown hook, and never twice:
-   * the snapshot-and-clear makes a second call a no-op, so the hook cannot re-NACK what
-   * the failure path already returned.
+   * the ledger's snapshot-and-clear makes a second call a no-op, so the hook cannot
+   * re-NACK what the failure path already returned.
    */
   private void abandonOutstanding(String cause) {
-    List<NackRequest.NackedLease> nacks = new ArrayList<>();
-    synchronized (reconciliation) {
-      if (reconciliation.isEmpty()) {
-        return;
-      }
-      reconciliation.forEach(
-          (unit, grant) ->
-              nacks.add(
-                  new NackRequest.NackedLease(
-                      unit,
-                      grant.fence(),
-                      "Abandoned on shard "
-                          + configuration.shardIndex()
-                          + " (pass "
-                          + configuration.pass()
-                          + "): "
-                          + cause
-                          + "; returned to the pool")));
-      reconciliation.clear();
+    List<NackRequest.NackedLease> nacks =
+        ledger.drainAll(
+            unit ->
+                "Abandoned on shard "
+                    + configuration.shardIndex()
+                    + " (pass "
+                    + configuration.pass()
+                    + "): "
+                    + cause
+                    + "; returned to the pool");
+    if (nacks.isEmpty()) {
+      return;
     }
     gateway.nack(nacks);
   }
@@ -239,7 +233,7 @@ final class ShardLoop {
         }
         // Tracked before the census is consulted: an unknown class name is a coordinator
         // bug, and its grants are NACKed on the way out rather than left to the TTL.
-        track(next.granted());
+        ledger.track(next.granted());
         className = next.className();
         drained = new ArrayList<>(next.granted());
         drained.addAll(drainClass(census.classNamed(className)));
@@ -300,19 +294,8 @@ final class ShardLoop {
       if (grants.isEmpty()) {
         return drained;
       }
-      track(grants);
+      ledger.track(grants);
       drained.addAll(grants);
-    }
-  }
-
-  /**
-   * Every grant enters reconciliation the moment it arrives, not when its batch runs: a
-   * failure between claiming and running -- a transport death mid-drain, a malformed
-   * grant -- must NACK what was already leased instead of abandoning it to the TTL.
-   */
-  private void track(List<Grant> grants) {
-    synchronized (reconciliation) {
-      grants.forEach(grant -> reconciliation.put(grant.testId(), grant));
     }
   }
 
@@ -368,17 +351,7 @@ final class ShardLoop {
     Grant grant = byUnit.get(result.unitId().value());
     boolean firstOnShard = firstResultPending.getAndSet(false);
     gateway.report(grant.fence(), result, firstOnShard);
-    synchronized (reconciliation) {
-      // Fence-guarded: a unit re-pooled mid-run (coordinator restart, lease expiry) can
-      // already be re-granted to a sibling slot under a newer fence, and this batch's
-      // stale report may only explain away its own grant. Removing blindly would strip
-      // the live lease from the ledger: a later failure could not NACK it, and a silent
-      // drop would reconcile to a clean exit while the unit sits leased and unrun.
-      Grant tracked = reconciliation.get(result.unitId().value());
-      if (tracked != null && tracked.fence().equals(grant.fence())) {
-        reconciliation.remove(result.unitId().value());
-      }
-    }
+    ledger.explain(result.unitId().value(), grant.fence());
     outcomes.put(result.unitId().value(), result.outcome());
   }
 
@@ -390,34 +363,27 @@ final class ShardLoop {
    * engine cannot explain is a bug in the engine, never a property of the suite.
    */
   private void reconcileOrFail() {
-    Map<String, Grant> unexplained;
-    synchronized (reconciliation) {
-      if (reconciliation.isEmpty()) {
-        return;
-      }
-      unexplained = new LinkedHashMap<>(reconciliation);
-      reconciliation.clear();
+    List<NackRequest.NackedLease> nacks =
+        ledger.drainAll(
+            unit ->
+                "Leased but never produced a terminal outcome on shard "
+                    + configuration.shardIndex()
+                    + " (pass "
+                    + configuration.pass()
+                    + "); returned to the pool");
+    if (nacks.isEmpty()) {
+      return;
     }
-    List<NackRequest.NackedLease> nacks = new ArrayList<>();
-    unexplained.forEach(
-        (unit, grant) ->
-            nacks.add(
-                new NackRequest.NackedLease(
-                    unit,
-                    grant.fence(),
-                    "Leased but never produced a terminal outcome on shard "
-                        + configuration.shardIndex()
-                        + " (pass "
-                        + configuration.pass()
-                        + "); returned to the pool")));
     gateway.nack(nacks);
     throw new ShardExecutionException(
         "Shard "
             + configuration.shardIndex()
             + " could not reconcile "
-            + unexplained.size()
+            + nacks.size()
             + " leased unit(s) to a terminal outcome; they were NACKed back to the pool: "
-            + String.join(", ", unexplained.keySet()));
+            + nacks.stream()
+                .map(NackRequest.NackedLease::testId)
+                .collect(Collectors.joining(", ")));
   }
 
   /**
