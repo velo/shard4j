@@ -56,7 +56,8 @@ final class LeaseLedger {
     synchronized (outstanding) {
       outstanding.forEach(
           (unit, grant) ->
-              nacks.add(new NackRequest.NackedLease(unit, grant.fence(), reasonFor.apply(unit))));
+              nacks.add(
+                  new NackRequest.NackedLease(unit, grant.fence(), reasonFor.apply(unit), false)));
       outstanding.clear();
     }
     return nacks;

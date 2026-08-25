@@ -66,7 +66,8 @@ class CoordinatorGateway {
             configuration.shardIndex(),
             configuration.attempt(),
             configuration.metadata(),
-            censusUnitIds);
+            censusUnitIds,
+            configuration.shardCount());
     this.api =
         Feign.builder()
             .encoder(new JacksonEncoder(JSON))
