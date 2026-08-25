@@ -73,7 +73,14 @@ final class CoordinatorGateway {
   }
 
   synchronized long register() {
-    RegisterResponse response = api.register(configuration.sessionId(), registration);
+    RegisterResponse response;
+    try {
+      response = api.register(configuration.sessionId(), registration);
+    } catch (FeignException.Conflict e) {
+      // A diverging census can never pass; surface the coordinator's naming of the
+      // differing ids instead of a bare status code.
+      throw new ShardExecutionException("Registration refused: " + e.contentUTF8());
+    }
     epoch = response.epoch();
     log.log(
         System.Logger.Level.INFO,
