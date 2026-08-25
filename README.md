@@ -56,6 +56,20 @@ directory, and one `verify` per pass -- per pass, because an execution that clai
 nothing writes no summary file at all, and a single aggregating verify would fail on the
 missing file exactly on the healthy early-release path.
 
+A shard's exit code is not the run's verdict; the coordinator's coverage verdict is. A
+test that failed in `main` and passed in `retry1` still leaves a failure in `main`'s
+summary, so a shard job can exit non-zero on a session the coordinator judges green.
+The one safe way to wire that up is a **non-gating shard job**: every shard job reports
+its own exit honestly, and the pipeline gates on a final step that reads the
+coordinator's verdict for the session. Do not reconcile the two with failsafe's
+`testFailureIgnore`, under this engine or next to it: it does not merely forgive a
+retried failure, it discards every failure the summary carries -- engine errors,
+mass-abort failures, reconciliation failures, and the `@AfterAll` that throws after its
+class's tests all passed, which no per-unit record can see because units are reported
+before the container finishes. That last shape leaves the verdict all-PASSED with the
+summary failure as the only surviving signal, and `testFailureIgnore` deletes exactly
+that signal. This is a rule, not a preference.
+
 Configuration is read from JUnit configuration parameters (which the launcher backs with
 system properties) first, then environment variables (`shard.foo.bar` maps to
 `SHARD_FOO_BAR`):

@@ -56,13 +56,67 @@ final class ShardLoop {
   void run(DiscoveredCensus census) {
     gateway.register();
     LivenessKeepalive keepalive = LivenessKeepalive.start(gateway);
+    Thread abandonOnKill =
+        new Thread(
+            () -> abandonOutstanding("the shard JVM was terminated mid-pass"),
+            "shard4j-abandon-leases");
+    Runtime.getRuntime().addShutdownHook(abandonOnKill);
     try {
       claimAndRunUntilDrained(census);
       reconcileOrFail();
       failOnMassAbort();
       holdAtBarrier();
+    } catch (RuntimeException | Error e) {
+      // An abnormal exit must never abandon leases to the TTL: healthy shards would sit
+      // at the barrier waiting out earliest_lease_expiry, converting one shard's failure
+      // into everyone's slowest path. NACK what is still outstanding, then fail honestly.
+      try {
+        abandonOutstanding("the shard failed mid-pass: " + e);
+      } catch (RuntimeException nackFailure) {
+        e.addSuppressed(nackFailure);
+      }
+      throw e;
     } finally {
+      removeHookQuietly(abandonOnKill);
       keepalive.stop();
+    }
+  }
+
+  /**
+   * Returns every still-outstanding lease to the pool, naming the cause. Reached from
+   * three places -- the mid-pass failure path, the SIGTERM shutdown hook, and never twice:
+   * the snapshot-and-clear makes a second call a no-op, so the hook cannot re-NACK what
+   * the failure path already returned.
+   */
+  private void abandonOutstanding(String cause) {
+    List<NackRequest.NackedLease> nacks = new ArrayList<>();
+    synchronized (reconciliation) {
+      if (reconciliation.isEmpty()) {
+        return;
+      }
+      reconciliation.forEach(
+          (unit, grant) ->
+              nacks.add(
+                  new NackRequest.NackedLease(
+                      unit,
+                      grant.fence(),
+                      "Abandoned on shard "
+                          + configuration.shardIndex()
+                          + " (pass "
+                          + configuration.pass()
+                          + "): "
+                          + cause
+                          + "; returned to the pool")));
+      reconciliation.clear();
+    }
+    gateway.nack(nacks);
+  }
+
+  private static void removeHookQuietly(Thread hook) {
+    try {
+      Runtime.getRuntime().removeShutdownHook(hook);
+    } catch (IllegalStateException alreadyShuttingDown) {
+      // The hook itself is what runs now; there is nothing to remove.
     }
   }
 
@@ -90,7 +144,9 @@ final class ShardLoop {
   private void runBatch(List<Grant> grants) {
     Map<String, Grant> byUnit = new LinkedHashMap<>();
     grants.forEach(grant -> byUnit.put(grant.testId(), grant));
-    reconciliation.putAll(byUnit);
+    synchronized (reconciliation) {
+      reconciliation.putAll(byUnit);
+    }
     Set<ExecutionId> leased = new HashSet<>();
     byUnit.keySet().forEach(unit -> leased.add(new ExecutionId(unit)));
     TestDescriptor batch =
@@ -113,7 +169,9 @@ final class ShardLoop {
     boolean firstOnShard = firstResultPending;
     firstResultPending = false;
     gateway.report(grant.fence(), result, firstOnShard);
-    reconciliation.remove(result.unitId().value());
+    synchronized (reconciliation) {
+      reconciliation.remove(result.unitId().value());
+    }
     outcomes.put(result.unitId().value(), result.outcome());
   }
 
@@ -125,11 +183,16 @@ final class ShardLoop {
    * engine cannot explain is a bug in the engine, never a property of the suite.
    */
   private void reconcileOrFail() {
-    if (reconciliation.isEmpty()) {
-      return;
+    Map<String, Grant> unexplained;
+    synchronized (reconciliation) {
+      if (reconciliation.isEmpty()) {
+        return;
+      }
+      unexplained = new LinkedHashMap<>(reconciliation);
+      reconciliation.clear();
     }
     List<NackRequest.NackedLease> nacks = new ArrayList<>();
-    reconciliation.forEach(
+    unexplained.forEach(
         (unit, grant) ->
             nacks.add(
                 new NackRequest.NackedLease(
@@ -145,9 +208,9 @@ final class ShardLoop {
         "Shard "
             + configuration.shardIndex()
             + " could not reconcile "
-            + reconciliation.size()
+            + unexplained.size()
             + " leased unit(s) to a terminal outcome; they were NACKed back to the pool: "
-            + String.join(", ", reconciliation.keySet()));
+            + String.join(", ", unexplained.keySet()));
   }
 
   /**

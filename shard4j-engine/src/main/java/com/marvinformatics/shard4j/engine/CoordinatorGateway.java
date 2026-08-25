@@ -36,8 +36,12 @@ import java.util.function.Supplier;
  *
  * <p>All calls are serialised: the engine is single-threaded, and the one background
  * caller -- the liveness keepalive -- must not interleave with a re-registration.
+ *
+ * <p>Deliberately not final: the engine's own tests override single calls to inject the
+ * transport failures -- an exhausted retry budget mid-batch -- that no healthy coordinator
+ * can be asked to produce.
  */
-final class CoordinatorGateway {
+class CoordinatorGateway {
 
   private static final System.Logger log = System.getLogger(CoordinatorGateway.class.getName());
 
