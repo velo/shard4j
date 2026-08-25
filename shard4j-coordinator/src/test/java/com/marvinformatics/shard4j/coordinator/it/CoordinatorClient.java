@@ -33,8 +33,6 @@ import feign.jackson.JacksonEncoder;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.List;
 import lombok.SneakyThrows;
 import org.testcontainers.containers.GenericContainer;
@@ -208,13 +206,6 @@ final class CoordinatorClient {
             new ClaimRequest(shard, Pass.MAIN, Ids.classNameOf(testId), List.of(testId)));
     assertThat(response.granted()).hasSize(1);
     return response.granted().get(0).fence();
-  }
-
-  @SneakyThrows
-  static String hashOf(List<String> testIds) {
-    MessageDigest digest = MessageDigest.getInstance("SHA-256");
-    String canonical = String.join("\n", testIds.stream().sorted().toList());
-    return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
   }
 
   private static RawResponse raw(Response response) {

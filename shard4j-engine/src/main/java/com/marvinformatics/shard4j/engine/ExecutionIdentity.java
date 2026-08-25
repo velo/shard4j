@@ -1,24 +1,22 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
-import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.List;
 import lombok.experimental.UtilityClass;
 import org.junit.platform.engine.TestDescriptor;
-import org.junit.platform.engine.TestSource;
 import org.junit.platform.engine.UniqueId;
 import org.junit.platform.engine.UniqueId.Segment;
-import org.junit.platform.engine.support.descriptor.MethodSource;
 
 /**
- * Builds the protocol's identity values from live JUnit Platform objects. This is the only
- * place either value is constructed: everything downstream -- the wire, the coordinator's
- * store, the duration history -- treats them as opaque strings.
+ * Builds the protocol's execution ids from live JUnit Platform objects. This is the only
+ * place the value is constructed: everything downstream -- the wire, the coordinator's
+ * store, the duration history -- treats it as an opaque string.
  */
 @UtilityClass
 public class ExecutionIdentity {
 
   private final String ENGINE_SEGMENT = "engine";
+  private final String CLASS_SEGMENT = "class";
   private final String JUPITER_ENGINE_ID = "junit-jupiter";
   private final String INVOCATION_SEGMENT = "test-template-invocation";
 
@@ -41,26 +39,6 @@ public class ExecutionIdentity {
     return new ExecutionId(wire.toString());
   }
 
-  /**
-   * The duration-history key, from the method source's three fields. Invocations of one
-   * template share the template's source, so they collapse onto its key with no id
-   * surgery.
-   */
-  public HistoryKey historyKey(TestDescriptor descriptor) {
-    TestSource source = descriptor.getSource().orElse(null);
-    if (!(source instanceof MethodSource method)) {
-      throw new IllegalArgumentException(
-          "No method source on " + descriptor.getUniqueId() + ", so no history key exists");
-    }
-    return new HistoryKey(
-        method.getClassName()
-            + "#"
-            + method.getMethodName()
-            + "("
-            + method.getMethodParameterTypes()
-            + ")");
-  }
-
   /** Re-roots a wire-form id under this engine's own root when handing it back to the platform. */
   public UniqueId underEngineRoot(UniqueId engineRoot, ExecutionId id) {
     UniqueId result = engineRoot;
@@ -81,6 +59,12 @@ public class ExecutionIdentity {
     }
     if (root == segments.size() || !segments.get(root).getType().equals(ENGINE_SEGMENT)) {
       throw new IllegalArgumentException("Not a Jupiter-rooted unique id: " + uniqueId);
+    }
+    // The wire contract: after the engine root comes a class segment or nothing at all
+    // (the engine node itself). Anything else is not an id this engine ever minted.
+    if (root + 1 < segments.size() && !segments.get(root + 1).getType().equals(CLASS_SEGMENT)) {
+      throw new IllegalArgumentException(
+          "A Jupiter-rooted id must start with [class: after its engine root: " + uniqueId);
     }
     UniqueId wire = UniqueId.forEngine(JUPITER_ENGINE_ID);
     for (Segment segment : segments.subList(root + 1, segments.size())) {

@@ -33,3 +33,65 @@ jobs:
       # artifact and no Spring artifact, and shard4j-protocol's runtime tree must be empty.
       - name: Build reactor
         run: mvn -B -ntp verify
+
+  # The invocation every real consumer uses -- failsafe's coordinated profile with its
+  # per-pass forked JVMs -- against a live coordinator container. The in-JVM harness runs
+  # three shards inside one launcher process, so fork boundaries, per-pass JVMs and the
+  # summary/report plumbing are all invisible to it; this job is where they break loudly.
+  coordinated-profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build and install the reactor
+        run: mvn -B -ntp -DskipTests install
+
+      # The secret matches the one shard4j-example's failsafe configuration exports to
+      # its forked JVMs; both are local values meaningless outside a build.
+      - name: Start the coordinator container
+        run: |
+          JAR=$(ls shard4j-coordinator/target/shard4j-coordinator-*-app.jar)
+          mkdir -p /tmp/shard4j-data
+          docker run -d --name shard4j-coordinator -p 8080:8080 \
+            -e COORDINATOR_SECRETS=local-integration-only \
+            -e COORDINATOR_TENANT_KEY=example/orders-service \
+            -e COORDINATOR_TENANT_SLUG=orders-service \
+            -e COORDINATOR_DATA_DIR=/data \
+            -v /tmp/shard4j-data:/data \
+            -v "$PWD/$JAR":/opt/shard4j/app.jar \
+            eclipse-temurin:25-jre java -jar /opt/shard4j/app.jar
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:8080/readyz >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "coordinator never became ready" >&2
+          docker logs shard4j-coordinator >&2 || true
+          exit 1
+
+      - name: Run the coordinated failsafe profile
+        run: |
+          mvn -B -ntp -f shard4j-example/pom.xml -Pcoordinated verify \
+            -Dshard.coordinator.url=http://localhost:8080 \
+            -Dshard.session.id=$(cat /proc/sys/kernel/random/uuid) \
+            -Dshard.index=0
+
+      # A green profile that executed nothing is the silent-green shape this repository
+      # exists to delete: the main pass's summary must show real completed tests.
+      - name: Assert the main pass ran tests
+        run: |
+          summary=shard4j-example/target/failsafe-reports/main/failsafe-summary.xml
+          test -f "$summary" || { echo "missing $summary" >&2; exit 1; }
+          completed=$(sed -n 's/.*<completed>\([0-9][0-9]*\)<\/completed>.*/\1/p' "$summary")
+          echo "main pass completed: ${completed:-0}"
+          test "${completed:-0}" -ge 1
+
+      - name: Stop the coordinator
+        if: always()
+        run: docker rm -f shard4j-coordinator

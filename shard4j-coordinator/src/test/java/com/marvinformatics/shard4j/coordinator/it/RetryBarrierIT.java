@@ -60,7 +60,7 @@ class RetryBarrierIT {
   }
 
   private static RegisterRequest registration(int shard, List<String> census) {
-    return new RegisterRequest(shard, 1, Map.of(), CoordinatorClient.hashOf(census), census);
+    return new RegisterRequest(shard, 1, Map.of(), census);
   }
 
   private static ResultRequest result(
@@ -450,7 +450,7 @@ class RetryBarrierIT {
 
     // A registration at a higher attempt: the old shards are known-dead, the epoch moves on.
     client.register(
-        sessionId, new RegisterRequest(5, 2, Map.of(), CoordinatorClient.hashOf(census), census));
+        sessionId, new RegisterRequest(5, 2, Map.of(), census));
 
     CoordinatorClient.RawResponse zombiePoll =
         client.barrierRaw(sessionId, new BarrierRequest(0, 1, Pass.MAIN));

@@ -20,7 +20,6 @@ public record SessionView(
     long epoch,
     Map<String, String> metadata,
     int registeredCount,
-    String registeredHash,
     List<ShardView> shards,
     List<TestView> tests,
     List<NackRequest.NackedLease> nacks,

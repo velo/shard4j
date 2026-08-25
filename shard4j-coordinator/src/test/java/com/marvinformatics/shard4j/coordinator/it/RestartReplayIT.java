@@ -40,7 +40,7 @@ class RestartReplayIT {
     String untouched = Ids.method(CLASS_B, "neverClaimed");
     List<String> census = List.of(passed, failed, skipped, leased, untouched);
     RegisterRequest registration =
-        new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(census), census);
+        new RegisterRequest(0, 1, Map.of(), census);
 
     long incarnationBefore;
     GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
@@ -123,9 +123,9 @@ class RestartReplayIT {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
       client.register(
-          sessionId, new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+          sessionId, new RegisterRequest(0, 1, Map.of(), census));
       client.register(
-          sessionId, new RegisterRequest(1, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+          sessionId, new RegisterRequest(1, 1, Map.of(), census));
       Fence fence = client.claimOne(sessionId, 0, worked);
       client.result(
           sessionId,

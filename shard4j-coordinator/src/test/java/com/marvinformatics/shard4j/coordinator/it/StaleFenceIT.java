@@ -57,9 +57,9 @@ class StaleFenceIT {
     String bystander = Ids.method(CLASS_NAME, "bystander");
     List<String> census = List.of(contested, bystander);
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census));
     client.register(
-        sessionId, new RegisterRequest(1, 1, Map.of(), CoordinatorClient.hashOf(census), census));
+        sessionId, new RegisterRequest(1, 1, Map.of(), census));
 
     Fence zombieFence = client.claimOne(sessionId, 0, contested);
     NackResponse nack =

@@ -42,7 +42,6 @@ final class Session {
       Duration.ofSeconds(3L * RETRY_AFTER_SECONDS);
 
   @Getter private final String id;
-  @Getter private final String testSetHash;
   private final Map<String, String> metadata;
   private final Map<String, UnitState> units = new LinkedHashMap<>();
   private final Map<Integer, ShardInfo> shards = new TreeMap<>();
@@ -59,20 +58,22 @@ final class Session {
       int attempt,
       long epoch,
       Map<String, String> metadata,
-      String testSetHash,
       List<String> tests,
       Instant now) {
     this.id = id;
     this.attempt = attempt;
     this.epoch = epoch;
     this.metadata = Map.copyOf(metadata == null ? Map.of() : metadata);
-    this.testSetHash = testSetHash;
     tests.forEach(testId -> units.put(testId, new UnitState()));
     this.lastActivity = now;
   }
 
   int registeredCount() {
     return units.size();
+  }
+
+  Set<String> censusIds() {
+    return Set.copyOf(units.keySet());
   }
 
   void touch(Instant now) {
@@ -429,7 +430,6 @@ final class Session {
         epoch,
         metadata,
         units.size(),
-        testSetHash,
         shardViews,
         testViews,
         List.copyOf(nacks),
