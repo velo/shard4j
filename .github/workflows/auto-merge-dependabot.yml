@@ -5,9 +5,14 @@ name: Dependabot auto-merge
 # failsafe profile against a live coordinator, and the container smoke test. A dependency
 # that breaks any of those never reaches this queue.
 #
-# Two repository settings make this work, and neither lives in the tree: "Allow auto-merge"
-# must be on, and main must require the build.yml checks. Without the required checks,
-# `--auto` degrades to merging on the spot.
+# Three repository settings make this work, and none of them lives in the tree. All three
+# are set; the workflow is inert or red without them:
+#
+#   - "Allow auto-merge" on the repository. Without it the merge step fails outright.
+#   - main requires the build.yml checks. Without them `--auto` degrades to merging on the
+#     spot rather than waiting for green, which removes the entire safety argument above.
+#   - "Allow GitHub Actions to create and approve pull requests". Without it the approve
+#     step fails with "GitHub Actions is not permitted to approve pull requests".
 on:
   pull_request:
     branches:
@@ -28,6 +33,9 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      # github-actions[bot] approving dependabot[bot] is two distinct identities, which is
+      # what makes this permissible at all. The action is idempotent -- a rebase re-fires
+      # the workflow, and it will not stack a second review on an already-approved PR.
       - name: Auto-approve
         uses: hmarr/auto-approve-action@v4
         with:

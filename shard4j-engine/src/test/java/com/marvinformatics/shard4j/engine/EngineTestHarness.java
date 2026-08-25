@@ -7,10 +7,10 @@ import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.OutputDirectoryCreator;
 import org.junit.platform.engine.TestDescriptor;
+import org.junit.platform.engine.UniqueId;
 import org.junit.platform.engine.support.descriptor.EngineDescriptor;
 import org.junit.platform.engine.support.store.Namespace;
 import org.junit.platform.engine.support.store.NamespacedHierarchicalStore;
-import org.junit.platform.engine.UniqueId;
 
 /** Builds the outer execution plumbing the engine normally receives from the launcher. */
 @UtilityClass
@@ -22,7 +22,7 @@ class EngineTestHarness {
         listener,
         new MapConfigurationParameters(Map.of()),
         outputDirectoryCreator(),
-        new NamespacedHierarchicalStore<Namespace>(
+        new NamespacedHierarchicalStore<>(
             new NamespacedHierarchicalStore<Namespace>(null)));
   }
 

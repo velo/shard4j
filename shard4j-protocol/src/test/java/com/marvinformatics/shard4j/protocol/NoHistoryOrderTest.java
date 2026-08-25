@@ -48,7 +48,7 @@ class NoHistoryOrderTest {
     List<HistoryKey> sorted =
         List.of(highest, lowest, middle).stream().sorted(HistoryKey.NO_HISTORY_ORDER).toList();
 
-    assertThat(sorted).isEqualTo(List.of(lowest, middle, highest));
+    assertThat(sorted).containsExactlyElementsOf(List.of(lowest, middle, highest));
   }
 
   @Test
@@ -66,8 +66,8 @@ class NoHistoryOrderTest {
   void breaksAHashTieLexicographically() {
     long tied = 0x00000000000000ffL;
 
-    assertThat(compareNoHistory(tied, "a.B#a()", tied, "a.B#b()")).isLessThan(0);
-    assertThat(compareNoHistory(tied, "a.B#b()", tied, "a.B#a()")).isGreaterThan(0);
+    assertThat(compareNoHistory(tied, "a.B#a()", tied, "a.B#b()")).isNegative();
+    assertThat(compareNoHistory(tied, "a.B#b()", tied, "a.B#a()")).isPositive();
     assertThat(compareNoHistory(tied, "a.B#a()", tied, "a.B#a()")).isZero();
   }
 

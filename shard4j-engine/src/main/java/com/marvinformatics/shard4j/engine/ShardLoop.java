@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
 
@@ -24,6 +26,7 @@ import org.junit.platform.engine.TestDescriptor;
  * and hold at the barrier. The next pass is the next failsafe execution block in the same
  * Maven run.
  */
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 final class ShardLoop {
 
   private static final System.Logger log = System.getLogger(ShardLoop.class.getName());
@@ -42,17 +45,6 @@ final class ShardLoop {
   private final Map<String, Grant> reconciliation = new LinkedHashMap<>();
   private final Map<String, Outcome> outcomes = new LinkedHashMap<>();
   private boolean firstResultPending = true;
-
-  ShardLoop(
-      ShardConfiguration configuration,
-      JupiterDelegate jupiter,
-      CoordinatorGateway gateway,
-      ExecutionRequest request) {
-    this.configuration = configuration;
-    this.jupiter = jupiter;
-    this.gateway = gateway;
-    this.request = request;
-  }
 
   void run(DiscoveredCensus census) {
     gateway.register();

@@ -1,6 +1,5 @@
 package com.marvinformatics.shard4j.protocol;
 
-import static java.util.List.of;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
@@ -52,10 +51,10 @@ class EndpointRecordsTest {
 
   @Test
   void aNackAnswersPerLeaseBecauseStaleEntriesAreRejectedIndividually() {
-    NackResponse response = new NackResponse(of("released-id"), of("stale-id"));
+    NackResponse response = new NackResponse(List.of("released-id"), List.of("stale-id"));
 
-    assertThat(response.released()).containsExactlyElementsOf(of("released-id"));
-    assertThat(response.rejected()).containsExactlyElementsOf(of("stale-id"));
+    assertThat(response.released()).containsExactlyElementsOf(List.of("released-id"));
+    assertThat(response.rejected()).containsExactlyElementsOf(List.of("stale-id"));
   }
 
   @Test

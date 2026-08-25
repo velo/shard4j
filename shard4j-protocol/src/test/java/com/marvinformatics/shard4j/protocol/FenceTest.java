@@ -31,8 +31,9 @@ class FenceTest {
   void comparesEqualOnlyToItself() {
     Fence fence = new Fence(1, 4, 102);
 
-    assertThat(fence).isEqualByComparingTo(new Fence(1, 4, 102));
-    assertThat(fence).isEqualTo(new Fence(1, 4, 102));
+    assertThat(fence)
+        .isEqualByComparingTo(new Fence(1, 4, 102))
+        .isEqualTo(new Fence(1, 4, 102));
   }
 
   @Test
@@ -40,7 +41,7 @@ class FenceTest {
     Fence beforeTheWrap = new Fence(1, 4, Integer.MAX_VALUE);
     Fence afterTheWrap = new Fence(1, 4, Integer.MAX_VALUE + 1L);
 
-    assertThat(beforeTheWrap.compareTo(afterTheWrap)).isLessThan(0);
+    assertThat(beforeTheWrap).isLessThan(afterTheWrap);
   }
 
   @Test
@@ -51,6 +52,6 @@ class FenceTest {
     Fence fourth = new Fence(2, 5, 0);
 
     assertThat(List.of(third, fourth, first, second).stream().sorted().toList())
-        .isEqualTo(List.of(first, second, third, fourth));
+        .containsExactlyElementsOf(List.of(first, second, third, fourth));
   }
 }

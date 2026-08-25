@@ -124,34 +124,79 @@ mvn -Popenrewrite verify    # rewrites sources in place, then review the diff
 mvn verify                  # prove the rewrite still compiles and passes
 ```
 
-Off by default, like `release`: the everyday build stays fast and offline. The recipes are
-AssertJ and Jupiter hygiene over the test sources, plus the language level each module is
-entitled to -- `UpgradeToJava17` everywhere, `UpgradeToJava25` in the coordinator, tracking
-the baselines table above through the `rewrite.java.recipe` property. The coordinator adds
-the Spring Boot 4 recipes in its own copy of the profile, because it is the one module that
-has ever heard of Spring.
+Off by default, like `release`: the everyday build stays fast and offline.
 
-Two constraints are worth knowing before editing that profile:
+**Run it until it stops changing things.** The AssertJ Refaster rules rewrite in steps --
+`compareTo(x) isLessThan(0)` becomes `isLessThan(x)` only once an earlier rule has turned
+the assertion into the shape the later rule matches. Two passes reached a fixpoint the last
+time; one pass is not proof of anything.
+
+Two constraints are worth knowing before editing the profile:
 
 - **pom.xml is excluded from every execution.** The recipes would otherwise "fix" the two
   things this build pins on purpose: the per-module `release` indirection and the JUnit
   Platform floor. Dependency and plugin versions move by human decision, or by Dependabot.
-- **The test recipes must not reach `src/main/java`.** `Assertj` chains in
+- **The `test-frameworks` execution must not reach `src/main/java`.** `Assertj` chains in
   `JUnit5BestPractices`, which chains in the JUnit Platform upgrade; `shard4j-engine`
   *implements* that Platform SPI in its main sources, so a blanket run rewrites the engine
-  against an API its own classpath may not carry. That is why there are two executions and
-  not one.
+  against an API its own classpath may not carry. Everything in the second execution is
+  safe anywhere, which is why only the first one is confined.
+
+### What is wired in, and what was tried and rejected
+
+| Recipe | | Why |
+|---|---|---|
+| `testing.assertj.Assertj` + four `junit5` recipes | in | AssertJ and Jupiter hygiene, test sources only |
+| `migrate.UpgradeToJava17` / `...25` | in | tracks the baselines table via `rewrite.java.recipe` |
+| `spring.boot4.*` | in | coordinator only -- the one module that has heard of Spring |
+| `staticanalysis.CommonStaticAnalysis` | in | import order, diamonds, method refs, `EqualsAvoidsNull` |
+| `security.JavaSecurityBestPractices` | in | finds nothing today; kept as a standing guard |
+| `migrate.lombok.LombokBestPractices` | **out** | see below |
+| `maven.BestPractices` | **out** | see below |
+
+`LombokBestPractices` is not wired in because two of its rules are actively wrong here:
+
+- `UseRequiredArgsConstructor` replaced `CoordinatorCore`'s hand-written constructor with
+  `@RequiredArgsConstructor(onConstructor_ = {@Builder})`, which **deletes
+  `CoordinatorCore.builder()`** -- the build stops compiling. It also deletes the comment
+  explaining why that constructor is hand-written, and reintroduces exactly the hazard the
+  comment warns about: `@RequiredArgsConstructor` takes its parameter order from field
+  declaration order, so a field reorder silently reorders the constructor.
+- `UseLombokGetter` put `@Getter` on a **record component**, where Lombok generates
+  nothing. That one compiles, which is worse: the interface's `default`
+  `getOutputDirectoryCreator()` -- which throws -- would have taken over at runtime.
+
+Three of its constructor rewrites were pure boilerplate removal and were taken by hand
+(`ShardLoop`, `LivenessKeepalive`, `Session.UnitState`). A blanket `@Getter`/`@Setter` pass
+would also fight the `@Accessors(fluent = true)` convention below.
+
+`maven.BestPractices` is the case the pom.xml exclusion was written for, and running it
+confirmed the rule rather than the exception:
+
+- `SortDependencies` alphabetises dependencies, which tears every dependency away from the
+  comment above it explaining why it is there.
+- `RemoveRedundantDependencyVersions` stripped `${lombok.version}` from the coordinator,
+  silently handing Lombok's version to Spring Boot's BOM instead of the property this
+  repository pins on purpose.
 
 ## Dependency updates
 
-Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves them and
-queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the gate
--- module boundary, forbiddenapis, the coordinated failsafe profile against a live
+Dependabot opens the PRs; `.github/workflows/auto-merge-dependabot.yml` approves each one
+and queues an auto-merge. Blanket auto-merge is only defensible because `build.yml` is the
+gate -- module boundary, forbiddenapis, the coordinated failsafe profile against a live
 coordinator, and the container smoke test all run before anything merges.
 
-Two settings live in the repository rather than the tree, and the workflow is inert without
-them: "Allow auto-merge" must be on, and `main` must require the `build.yml` checks.
-Without required checks, `--auto` degrades to merging on the spot.
+Three settings live in the repository rather than the tree. All three are set, and the
+workflow is inert or red without them:
+
+- **"Allow auto-merge"** on the repository, or the merge step fails outright.
+- **`main` requires the three `build.yml` checks.** Without them `--auto` degrades to
+  merging on the spot rather than waiting for green, which removes the safety argument the
+  whole arrangement rests on.
+- **"Allow GitHub Actions to create and approve pull requests"** (Settings -> Actions ->
+  General), or the approve step fails with "GitHub Actions is not permitted to approve pull
+  requests". `github-actions[bot]` approving `dependabot[bot]` is two distinct identities,
+  which is what makes it permissible; a token approving its own PR still would not be.
 
 `org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
 They are what set the engine's release-17 floor, and a bot must not be the thing that moves

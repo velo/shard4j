@@ -1,7 +1,5 @@
 package com.marvinformatics.shard4j.coordinator.storage;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
 import com.marvinformatics.shard4j.coordinator.core.HistoryKeys;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.Outcome;
@@ -21,6 +19,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
 
 /**
  * The in-memory duration aggregate behind slowest-first ordering.
