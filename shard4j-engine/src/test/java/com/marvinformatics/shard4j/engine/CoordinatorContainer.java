@@ -3,8 +3,14 @@ package com.marvinformatics.shard4j.engine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.marvinformatics.shard4j.protocol.ClaimRequest;
+import com.marvinformatics.shard4j.protocol.ClaimResponse;
+import com.marvinformatics.shard4j.protocol.RegisterRequest;
+import com.marvinformatics.shard4j.protocol.RegisterResponse;
+import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import feign.Feign;
+import feign.Headers;
 import feign.Param;
 import feign.RequestLine;
 import feign.jackson.JacksonDecoder;
@@ -48,12 +54,19 @@ class CoordinatorContainer {
   }
 
   GenericContainer<?> start(Map<String, String> extraEnvironment) {
-    Path dataDir;
+    return start(extraEnvironment, newDataDir());
+  }
+
+  /** Tests that seed history before first boot prepare the data directory themselves. */
+  Path newDataDir() {
     try {
-      dataDir = Files.createTempDirectory(Path.of("target"), "engine-it-data");
+      return Files.createTempDirectory(Path.of("target"), "engine-it-data");
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
+  }
+
+  GenericContainer<?> start(Map<String, String> extraEnvironment, Path dataDir) {
     Map<String, String> environment = new HashMap<>();
     environment.put("COORDINATOR_SECRETS", SECRET);
     environment.put("COORDINATOR_TENANT_KEY", "example/orders-service");
@@ -91,6 +104,29 @@ class CoordinatorContainer {
 
     @RequestLine("GET /sessions/{sessionId}")
     SessionView view(@Param("sessionId") String sessionId);
+  }
+
+  /** A raw wire client, for tests that play another shard against the same session. */
+  ShardApi shardApiOf(GenericContainer<?> container) {
+    ObjectMapper json = JsonMapper.builder().addModule(new JavaTimeModule()).build();
+    return Feign.builder()
+        .encoder(new JacksonEncoder(json))
+        .decoder(new JacksonDecoder(json))
+        .requestInterceptor(template -> template.header("Authorization", "Bearer " + SECRET))
+        .target(ShardApi.class, urlOf(container));
+  }
+
+  @Headers("Content-Type: application/json")
+  interface ShardApi {
+
+    @RequestLine("POST /sessions/{sessionId}/register")
+    RegisterResponse register(@Param("sessionId") String sessionId, RegisterRequest request);
+
+    @RequestLine("POST /sessions/{sessionId}/claims")
+    ClaimResponse claim(@Param("sessionId") String sessionId, ClaimRequest request);
+
+    @RequestLine("POST /sessions/{sessionId}/results")
+    void result(@Param("sessionId") String sessionId, ResultRequest request);
   }
 
   private String currentUidGid() {
