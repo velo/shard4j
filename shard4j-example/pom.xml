@@ -145,11 +145,24 @@
 
   <profiles>
     <!-- The consumer integration this module exists to demonstrate: junit-jupiter is
-         excluded so the shard4j engine owns execution, three integration-test executions
-         are the three passes, and one verify aggregates all three summaries. Run it as
+         excluded so the shard4j engine owns execution, and there is exactly ONE
+         integration-test execution. Run it as
 
            SHARD_COORDINATOR_SECRET=... mvn -Pcoordinated verify \
              -Dshard.coordinator.url=... -Dshard.session.id=$(uuidgen) -Dshard.index=0
+
+         One execution, because retries no longer need another one. A failure with attempt
+         budget left goes straight back to the coordinator's claimable queue and is picked
+         up inside this same execution, by whichever shard asks next, which is usually not
+         the one that just failed it. The engine keeps the summary honest across that: a
+         failure the coordinator will requeue is reported to failsafe as aborted, so only
+         an exhausted budget reddens the run. Three executions bought nothing here but two
+         more JVM forks per shard, each with its own classpath scan and discovery, during
+         which the shard holds no lease and sends nothing.
+
+         Nothing overrides summaryFile or reportsDirectory any more either. Those overrides
+         existed only because three executions shared one set of defaults, so the third
+         overwrote the first two and a real failure read as zero tests and a clean exit.
 
          forkCount is deliberately not set anywhere: failsafe's own default of one JVM per
          shard applies, and the shard count is the only parallelism. -->
@@ -176,97 +189,25 @@
                 <id>default</id>
                 <phase>none</phase>
               </execution>
-            <execution>
-              <id>shard-pass-main</id>
-              <goals>
-                <goal>integration-test</goal>
-              </goals>
-              <configuration>
-                <!-- A distinct summary file AND a distinct reports directory per pass:
-                     the defaults are shared, so pass 3 would overwrite passes 1-2 and a
-                     real failure would read as "0 tests, exit 0" in the summary. -->
-                <summaryFile>${project.build.directory}/failsafe-reports/main/failsafe-summary.xml</summaryFile>
-                <reportsDirectory>${project.build.directory}/failsafe-reports/main</reportsDirectory>
-                <systemPropertyVariables>
-                  <shard.enabled>true</shard.enabled>
-                  <shard.pass>main</shard.pass>
-                  <shard.coordinator.url>${shard.coordinator.url}</shard.coordinator.url>
-                  <shard.session.id>${shard.session.id}</shard.session.id>
-                  <shard.index>${shard.index}</shard.index>
-                </systemPropertyVariables>
-              </configuration>
-            </execution>
-            <execution>
-              <id>shard-pass-retry1</id>
-              <goals>
-                <goal>integration-test</goal>
-              </goals>
-              <configuration>
-                <!-- A distinct summary file AND a distinct reports directory per pass:
-                     the defaults are shared, so pass 3 would overwrite passes 1-2 and a
-                     real failure would read as "0 tests, exit 0" in the summary. -->
-                <summaryFile>${project.build.directory}/failsafe-reports/retry1/failsafe-summary.xml</summaryFile>
-                <reportsDirectory>${project.build.directory}/failsafe-reports/retry1</reportsDirectory>
-                <systemPropertyVariables>
-                  <shard.enabled>true</shard.enabled>
-                  <shard.pass>retry1</shard.pass>
-                  <shard.coordinator.url>${shard.coordinator.url}</shard.coordinator.url>
-                  <shard.session.id>${shard.session.id}</shard.session.id>
-                  <shard.index>${shard.index}</shard.index>
-                </systemPropertyVariables>
-              </configuration>
-            </execution>
-            <execution>
-              <id>shard-pass-retry2</id>
-              <goals>
-                <goal>integration-test</goal>
-              </goals>
-              <configuration>
-                <!-- A distinct summary file AND a distinct reports directory per pass:
-                     the defaults are shared, so pass 3 would overwrite passes 1-2 and a
-                     real failure would read as "0 tests, exit 0" in the summary. -->
-                <summaryFile>${project.build.directory}/failsafe-reports/retry2/failsafe-summary.xml</summaryFile>
-                <reportsDirectory>${project.build.directory}/failsafe-reports/retry2</reportsDirectory>
-                <systemPropertyVariables>
-                  <shard.enabled>true</shard.enabled>
-                  <shard.pass>retry2</shard.pass>
-                  <shard.coordinator.url>${shard.coordinator.url}</shard.coordinator.url>
-                  <shard.session.id>${shard.session.id}</shard.session.id>
-                  <shard.index>${shard.index}</shard.index>
-                </systemPropertyVariables>
-              </configuration>
-            </execution>
-            <!-- One verify per pass, not one verify listing all three: an execution
-                 that ran zero tests writes no summary file at all, and verify hard-fails
-                 on a listed-but-missing extra summary. With early release an empty retry
-                 pass is the normal green path, so each pass is verified on its own and a
-                 missing summary simply means that pass had nothing to do. -->
-            <execution>
-                <id>shard-verify-main</id>
+              <execution>
+                <id>shard-coordinated</id>
                 <goals>
-                  <goal>verify</goal>
+                  <goal>integration-test</goal>
                 </goals>
                 <configuration>
-                  <summaryFile>${project.build.directory}/failsafe-reports/main/failsafe-summary.xml</summaryFile>
+                  <systemPropertyVariables>
+                    <shard.enabled>true</shard.enabled>
+                    <shard.coordinator.url>${shard.coordinator.url}</shard.coordinator.url>
+                    <shard.session.id>${shard.session.id}</shard.session.id>
+                    <shard.index>${shard.index}</shard.index>
+                  </systemPropertyVariables>
                 </configuration>
               </execution>
-            <execution>
-                <id>shard-verify-retry1</id>
+              <execution>
+                <id>shard-verify</id>
                 <goals>
                   <goal>verify</goal>
                 </goals>
-                <configuration>
-                  <summaryFile>${project.build.directory}/failsafe-reports/retry1/failsafe-summary.xml</summaryFile>
-                </configuration>
-              </execution>
-            <execution>
-                <id>shard-verify-retry2</id>
-                <goals>
-                  <goal>verify</goal>
-                </goals>
-                <configuration>
-                  <summaryFile>${project.build.directory}/failsafe-reports/retry2/failsafe-summary.xml</summaryFile>
-                </configuration>
               </execution>
             </executions>
           </plugin>

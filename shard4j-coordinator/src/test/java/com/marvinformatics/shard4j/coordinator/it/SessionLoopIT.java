@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.marvinformatics.shard4j.coordinator.core.CoverageVerdict;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
@@ -183,13 +184,16 @@ class SessionLoopIT {
     String failing = Ids.method(ALPHA, "first");
 
     // Attempts one and two: each failure puts the unit straight back on the queue, with
-    // no pass to wait for. The grant says how much budget is left, which is what lets the
-    // engine decide whether to report the failure to the launcher as aborted or as failed.
+    // no pass to wait for. The grant carries the coordinator's promise that a failure of
+    // this attempt would be requeued, which is what lets the engine decide whether to
+    // report the failure to the launcher as aborted or as failed.
     for (int attempt = 1; attempt <= 2; attempt++) {
       ClaimResponse claimed =
           client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing)));
       assertThat(claimed.granted()).as("attempt %d must be claimable", attempt).hasSize(1);
-      assertThat(claimed.granted().get(0).attemptsRemaining()).isEqualTo(4 - attempt);
+      assertThat(claimed.granted().get(0).retryable())
+          .as("attempt %d still has budget behind it", attempt)
+          .isTrue();
       client.result(
           sessionId,
           new ResultRequest(
@@ -206,8 +210,9 @@ class SessionLoopIT {
     // The third and final attempt: still claimable, but with no budget behind it.
     ClaimResponse last = client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing)));
     assertThat(last.granted()).hasSize(1);
-    assertThat(last.granted().get(0).attemptsRemaining()).isEqualTo(1);
-    assertThat(last.granted().get(0).retryable()).isFalse();
+    assertThat(last.granted().get(0).retryable())
+        .as("the final attempt has nothing behind it, so the shard must redden on failure")
+        .isFalse();
     client.result(
         sessionId,
         new ResultRequest(
@@ -219,6 +224,17 @@ class SessionLoopIT {
         .isEmpty();
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, failing)).isEqualTo(TestState.FAILED);
+    // The budget is observable as the attempt ordinals it spent, which is where the count
+    // belongs: three attempts, numbered from one, none of them lost or repeated.
+    assertThat(
+            view.tests().stream()
+                .filter(test -> test.testId().equals(failing))
+                .findFirst()
+                .orElseThrow()
+                .records())
+        .extracting(SessionView.RecordView::attempt, SessionView.RecordView::outcome)
+        .containsExactly(
+            tuple(1, Outcome.FAILED), tuple(2, Outcome.FAILED), tuple(3, Outcome.FAILED));
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
   }
 

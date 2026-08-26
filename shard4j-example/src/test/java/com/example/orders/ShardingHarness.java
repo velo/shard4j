@@ -35,8 +35,9 @@ import org.testcontainers.images.builder.ImageFromDockerfile;
  * Simulates what failsafe's coordinated profile does -- exclude junit-jupiter, hand the
  * suite to the shard4j engine with per-shard configuration -- through the launcher, in
  * process, against the real coordinator jar running in a real container. Three shards are
- * three launcher sessions; three passes are three executions, exactly as the three
- * failsafe execution blocks would run them.
+ * three launcher sessions, and each is one execution, exactly as the profile's single
+ * failsafe execution block runs it: retries happen inside a shard's own loop, so a second
+ * session for the same shard would be simulating a configuration nobody declares.
  */
 final class ShardingHarness {
 

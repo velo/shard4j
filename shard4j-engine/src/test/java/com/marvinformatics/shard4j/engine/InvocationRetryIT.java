@@ -19,14 +19,14 @@ import org.junit.platform.engine.UniqueId;
 import org.testcontainers.containers.GenericContainer;
 
 /**
- * Retry accounting for a split method: the invocations spread over two shards in MAIN,
- * one row fails, and RETRY1 re-hands exactly that position -- one unit, never the whole
- * method -- to whichever unreleased shard asks first, which pays its own class setup to
- * run it. Which shard that is the barrier decides: with one retry unit and two waiters it
- * releases the excess waiter, so the retry may land on either index --
+ * Retry accounting for a split method: the invocations spread over two shards, one row
+ * fails, and the requeue re-hands exactly that position -- one unit, never the whole
+ * method -- to whichever unreleased shard asks next, which pays its own class setup to
+ * run it. Which shard that is the barrier decides: with one requeued unit and two waiters
+ * it releases the excess waiter, so the retry may land on either index --
  * {@code InvocationDistributionIT} pins the cross-shard case deterministically at the
- * wire. The row that flaked ends PASSED with a MAIN failure and a RETRY1 pass on its
- * record, its siblings never re-run, and the coverage verdict counts every position
+ * wire. The row that flaked ends PASSED carrying attempt 1 FAILED and attempt 2 PASSED on
+ * its record, its siblings never re-run, and the coverage verdict counts every position
  * terminal.
  */
 class InvocationRetryIT {

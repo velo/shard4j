@@ -260,11 +260,7 @@ public final class CoordinatorCore {
       session.lease(unit.id(), shard, fence, now, expiresAt);
       granted.add(
           new Grant(
-              unit.id(),
-              fence,
-              expiresAt,
-              unit.probe(),
-              session.attemptsRemaining(unit.id())));
+              unit.id(), fence, expiresAt, unit.probe(), session.retryableAfterFailure(unit.id())));
     }
     return granted;
   }
@@ -357,8 +353,7 @@ public final class CoordinatorCore {
             session.isRegistered(lease.testId()) ? session.currentFence(lease.testId()) : null;
         if (current != null && current.equals(lease.fence())) {
           session.releaseLease(lease.testId());
-          session.recordNack(lease, now);
-          session.clearIdle(request.shard());
+          session.recordNack(request.shard(), lease, now);
           sessionLog.appendQuietly(
               LogRecord.nack(
                   tenantKey,
@@ -418,7 +413,7 @@ public final class CoordinatorCore {
             LogRecord.shardIdle(tenantKey, sessionId, session.epoch(), request.shard(), now));
       }
       session.markIdle(request.shard(), now);
-      BarrierResponse decision = session.barrierDecision(request.shard(), now);
+      BarrierResponse decision = session.barrierDecision(request.shard());
       // DONE because the session is finished is not an early release, and recording it as
       // one would claim a decision that was never made. Only a shard told to stop while
       // work is still outstanding elsewhere is released.
@@ -520,10 +515,23 @@ public final class CoordinatorCore {
       log.warn("Replay: completion for unregistered {} ignored", record.testId());
       return;
     }
+    // Every COMPLETION this version writes carries its attempt ordinal. A record without
+    // one predates the attempt budget, and that log is not readable here at all -- its
+    // barrier records carry a record type this version no longer knows. Refusing by name
+    // beats unboxing null into a NullPointerException three frames down.
+    if (record.unitAttempt() == null) {
+      throw new IllegalStateException(
+          "Refusing replay: COMPLETION for "
+              + record.testId()
+              + " in session "
+              + record.session()
+              + " carries no attempt ordinal, so it was written before the attempt budget"
+              + " existed; start from an empty data directory");
+    }
     session.applyResult(
         record.shard(),
         record.testId(),
-        record.unitAttempt() == null ? session.attemptsOf(record.testId()) + 1 : record.unitAttempt(),
+        record.unitAttempt(),
         record.outcome(),
         record.durationMs(),
         record.reason(),
@@ -536,14 +544,13 @@ public final class CoordinatorCore {
       return;
     }
     boolean vanished = Boolean.TRUE.equals(record.vanished());
-    session.recordNack(
-        new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished), record.ts());
-    // Mirrors the live path: a NACK proves the shard was holding work, so replaying one
-    // must end its idle clock too, or the fold keeps a stale idleSince the live run cleared
+    // The shard travels with the record so the replayed NACK ends the idle clock exactly as
+    // the live one did: without it the fold keeps a stale idleSince the live run cleared,
     // and markIdle's first-arrival-wins guard then swallows the later, correct arrival.
-    if (record.shard() != null) {
-      session.clearIdle(record.shard());
-    }
+    session.recordNack(
+        record.shard(),
+        new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished),
+        record.ts());
     // Only the census correction is replayed; the duration-store drop lives in the
     // snapshot. A re-expansion that resurrects the probe merely re-probes and re-vanishes.
     if (vanished
@@ -591,7 +598,6 @@ public final class CoordinatorCore {
     for (int shard : session.departSilentShards(now)) {
       sessionLog.appendQuietly(LogRecord.departed(tenantKey, sessionId, shard, now));
     }
-
   }
 
   /**

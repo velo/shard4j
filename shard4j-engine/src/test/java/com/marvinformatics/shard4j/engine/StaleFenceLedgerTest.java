@@ -58,6 +58,6 @@ class StaleFenceLedgerTest {
   }
 
   private static Grant grant(Fence fence) {
-    return new Grant(UNIT, fence, Instant.now().plusSeconds(60), false, 3);
+    return new Grant(UNIT, fence, Instant.now().plusSeconds(60), false, true);
   }
 }

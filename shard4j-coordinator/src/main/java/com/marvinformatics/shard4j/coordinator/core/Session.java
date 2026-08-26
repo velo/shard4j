@@ -7,7 +7,6 @@ import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -16,15 +15,15 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.Accessors;
 
 /**
- * One live session: the census, the per-unit state machine, the shard roster and the
- * diagnostic side channels. All mutation happens under the coordinator's single write lock.
+ * One live session: the census, the per-unit state machine and the diagnostic side
+ * channels. The shard roster and every policy that reads only it live in
+ * {@link ShardRoster}. All mutation happens under the coordinator's single write lock.
  *
  * <p>The census lives here at two granularities on purpose. What a shard registers -- and
  * what registration equality is judged over -- is the method-level enumeration, because
@@ -43,24 +42,14 @@ final class Session {
   // happened without letting it eat the heap.
   private static final int DIAGNOSTIC_CAP = 100;
 
-  // The poll cadence the design fixes for a shard waiting at a barrier.
-  private static final int RETRY_AFTER_SECONDS = 5;
-
-  // The cadence is mandated, so silence is measurable: a shard holding no lease that has
-  // missed three consecutive polls is presumed dead. Generous against jitter, and cheap to
-  // be wrong about -- a merely slow or partitioned shard rejoins on its next call.
-  private static final Duration PRESUMED_DEAD_AFTER =
-      Duration.ofSeconds(3L * RETRY_AFTER_SECONDS);
-
   @Getter private final String id;
   private final Map<String, String> metadata;
   private final Set<String> registered = new LinkedHashSet<>();
   private final Map<String, List<String>> unitsByCensusId = new LinkedHashMap<>();
   private final Map<String, UnitState> units = new LinkedHashMap<>();
-  private final Map<Integer, ShardInfo> shards = new TreeMap<>();
+  private final ShardRoster roster = new ShardRoster();
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
-  private final Instant createdAt;
   private final FairShare fairShare;
   private int nacksDropped;
   private int staleResultsDropped;
@@ -94,8 +83,7 @@ final class Session {
           }
           unitsByCensusId.put(censusId, unitIds);
         });
-    this.createdAt = now;
-    this.fairShare = new FairShare(shards, now);
+    this.fairShare = new FairShare(roster, now);
     this.lastActivity = now;
   }
 
@@ -132,28 +120,37 @@ final class Session {
   }
 
   void join(int shard, Instant now) {
-    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    info.departed = false;
-    info.explicitlyDeparted = false;
-    info.lastSeenAt = now;
+    roster.join(shard, now);
     touch(now);
   }
 
-  /** The shard's own goodbye -- unlike a presumed death, a barrier packet cannot undo it. */
   void depart(int shard) {
-    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    info.departed = true;
-    info.explicitlyDeparted = true;
+    roster.depart(shard);
   }
 
   boolean hasJoined(int shard) {
-    ShardInfo info = shards.get(shard);
-    return info != null && !info.departed;
+    return roster.hasJoined(shard);
   }
 
   boolean hasDeparted(int shard) {
-    ShardInfo info = shards.get(shard);
-    return info != null && info.departed;
+    return roster.hasDeparted(shard);
+  }
+
+  boolean isIdle(int shard) {
+    return roster.isIdle(shard);
+  }
+
+  boolean isReleased(int shard) {
+    return roster.isReleased(shard);
+  }
+
+  void release(int shard) {
+    roster.release(shard);
+  }
+
+  void markIdle(int shard, Instant now) {
+    roster.markIdle(shard, now);
+    touch(now);
   }
 
   /**
@@ -171,14 +168,7 @@ final class Session {
         unit.lease = null;
       }
     }
-    // The previous attempt's shards are known-dead and its barriers never resolve; the new
-    // attempt's shards re-join with a clean watermark and no early release.
-    for (ShardInfo info : shards.values()) {
-      info.departed = true;
-      info.explicitlyDeparted = false;
-      info.idleSince = null;
-      info.released = false;
-    }
+    roster.epochBumped();
     fairShare.epochBumped();
   }
 
@@ -259,46 +249,10 @@ final class Session {
     return fairShare.invocationAllowance(unitsOfMethod, shard, now);
   }
 
-  boolean isIdle(int shard) {
-    ShardInfo info = shards.get(shard);
-    return info != null && info.idleSince != null;
-  }
-
-  /**
-   * Arrival at a barrier is proof of life, so it reverses a presumed death -- and that
-   * revival is load-bearing: were a fleet's leases all to expire at once, the pools would
-   * be resolved against zero live shards and every still-working shard would be released
-   * with units pending. An explicit departure is different: the shard said goodbye, so the
-   * only arrival that can follow is a delayed or duplicated packet, and reviving on that
-   * would resurrect a shard that will never poll again into every future quorum.
-   */
-  void markIdle(int shard, Instant now) {
-    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    if (!info.explicitlyDeparted) {
-      info.departed = false;
-      info.lastSeenAt = now;
-    }
-    // First arrival wins: the clock measures how long this shard has been starved, and
-    // restarting it on every poll would make a patient shard look freshly idle forever.
-    if (info.idleSince == null) {
-      info.idleSince = now;
-    }
-    touch(now);
-  }
-
   /** Work still in play: a unit claimable now, or one leased that could yet requeue. */
   boolean hasOutstandingWork() {
     return units.values().stream()
         .anyMatch(unit -> unit.state == TestState.PENDING || unit.state == TestState.LEASED);
-  }
-
-  boolean isReleased(int shard) {
-    ShardInfo info = shards.get(shard);
-    return info != null && info.released;
-  }
-
-  void release(int shard) {
-    shards.computeIfAbsent(shard, index -> new ShardInfo()).released = true;
   }
 
   /**
@@ -324,7 +278,7 @@ final class Session {
    * poll and loses the run -- the failure mode this barrier exists to prevent. Holding
    * costs at most one test's duration; the alternative costs the whole suite.
    */
-  BarrierResponse barrierDecision(int shard, Instant now) {
+  BarrierResponse barrierDecision(int shard) {
     if (isReleased(shard)) {
       return done();
     }
@@ -345,56 +299,26 @@ final class Session {
     if (claimable + outstanding == 0) {
       return done();
     }
-    int rank = hungerRank(shard, now);
+    int rank = roster.hungerRank(shard);
     if (rank < claimable) {
       return new BarrierResponse(BarrierResponse.Action.RUN, null, null);
     }
     if (rank < claimable + outstanding) {
       return new BarrierResponse(
-          BarrierResponse.Action.WAIT, RETRY_AFTER_SECONDS, earliestLeaseExpiry);
+          BarrierResponse.Action.WAIT, ShardRoster.RETRY_AFTER_SECONDS, earliestLeaseExpiry);
     }
     return done();
-  }
-
-  /**
-   * How many live shards have been starved longer than this one. Polling is pull-based, so
-   * without an explicit order a requeued unit goes to whoever happens to ask next -- which
-   * on a fleet of equal pollers is arbitrary, and reliably starves a shard that has been
-   * waiting since long before the others arrived. Ties break on shard index so the order is
-   * total and no two shards ever read the same rank.
-   */
-  private int hungerRank(int shard, Instant now) {
-    Instant mine =
-        shards.containsKey(shard) && shards.get(shard).idleSince != null
-            ? shards.get(shard).idleSince
-            : now;
-    return (int)
-        shards.entrySet().stream()
-            .filter(entry -> entry.getKey() != shard)
-            .filter(entry -> !entry.getValue().departed && !entry.getValue().released)
-            .filter(entry -> entry.getValue().idleSince != null)
-            .filter(
-                entry -> {
-                  int byTime = entry.getValue().idleSince.compareTo(mine);
-                  return byTime < 0 || (byTime == 0 && entry.getKey() < shard);
-                })
-            .count();
   }
 
   private static BarrierResponse done() {
     return new BarrierResponse(BarrierResponse.Action.DONE, null, null);
   }
 
-  void lease(
-      String testId, int shard, Fence fence, Instant grantedAt, Instant expiresAt) {
+  void lease(String testId, int shard, Fence fence, Instant grantedAt, Instant expiresAt) {
     UnitState unit = units.get(testId);
     unit.lease = new Lease(shard, fence, grantedAt, expiresAt, unit.state, unit.attempts);
     unit.state = TestState.LEASED;
-    // Taking work ends the wait. Without this the flag set at the barrier never cleared,
-    // so a shard that went back to work still counted as starved and the fleet released
-    // shards that were needed.
-    ShardInfo holder = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    holder.idleSince = null;
+    roster.proofOfWork(shard);
     fairShare.resumed(shard);
   }
 
@@ -409,9 +333,7 @@ final class Session {
     List<Integer> newlyDeparted = new ArrayList<>();
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.LEASED && !unit.lease.expiresAt().isAfter(now)) {
-        ShardInfo info = shards.computeIfAbsent(unit.lease.shard(), index -> new ShardInfo());
-        if (!info.departed) {
-          info.departed = true;
+        if (roster.presumeDead(unit.lease.shard())) {
           newlyDeparted.add(unit.lease.shard());
         }
         restore(unit);
@@ -420,15 +342,7 @@ final class Session {
     return newlyDeparted;
   }
 
-  /**
-   * The waiter-side twin of lease expiry: a shard waiting at a barrier holds no lease, so
-   * expiry can never notice its death, yet its stale watermark would keep counting in the
-   * waiter tally and the quorum forever. The mandated poll cadence makes its silence
-   * measurable instead -- no lease held and nothing heard for {@link #PRESUMED_DEAD_AFTER}
-   * means presumed dead, and it departs exactly as an expired holder does. Released shards
-   * are exempt: DONE told them to stop polling, so silence is their normal state, and they
-   * already count in no quorum and no tally.
-   */
+  /** The roster's silence sweep, told which shards are excused by holding a lease. */
   List<Integer> departSilentShards(Instant now) {
     Set<Integer> leaseHolders = new HashSet<>();
     for (UnitState unit : units.values()) {
@@ -436,20 +350,7 @@ final class Session {
         leaseHolders.add(unit.lease.shard());
       }
     }
-    List<Integer> newlyDeparted = new ArrayList<>();
-    for (Map.Entry<Integer, ShardInfo> entry : shards.entrySet()) {
-      ShardInfo info = entry.getValue();
-      boolean silentTooLong =
-          info.lastSeenAt == null || !info.lastSeenAt.plus(PRESUMED_DEAD_AFTER).isAfter(now);
-      if (!info.departed
-          && !info.released
-          && silentTooLong
-          && !leaseHolders.contains(entry.getKey())) {
-        info.departed = true;
-        newlyDeparted.add(entry.getKey());
-      }
-    }
-    return newlyDeparted;
+    return roster.departSilent(now, leaseHolders);
   }
 
   Fence currentFence(String testId) {
@@ -457,9 +358,14 @@ final class Session {
     return lease != null ? lease.fence() : null;
   }
 
-  /** Attempts still available to this unit, the one about to run included. */
-  int attemptsRemaining(String testId) {
-    return Math.max(0, maxAttempts - attemptsOf(testId));
+  /**
+   * True when a failure of the attempt about to run would be requeued rather than made
+   * terminal -- the same expression {@link #applyResult} evaluates once the attempt is
+   * spent, so the promise the grant carries and the decision that honours it cannot say
+   * different things.
+   */
+  boolean retryableAfterFailure(String testId) {
+    return attemptsOf(testId) + 1 < maxAttempts;
   }
 
   /** Attempts already spent on this unit; the one being recorded now is this plus one. */
@@ -514,36 +420,12 @@ final class Session {
       }
     }
     unit.lease = null;
-    ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    // Part of the replay-safe half of the idle lifecycle. Leases are deliberately not
-    // logged, so the clear in lease() exists only in memory: fold the log after a restart
-    // and a shard that idled once and then worked for an hour comes back
-    // idle-since-its-first-barrier, outranking every genuine waiter and getting them
-    // released while work is outstanding. Every logged proof that a shard was working
-    // therefore clears it -- here, and on the NACK and stale-result paths below.
-    //
-    // This narrows the phantom rather than eliminating it: a shard that idles, leases, and
-    // dies before producing any of those three leaves nothing in the log to clear it, and
-    // replays as idle until its next lease. The residual window is "restart to that shard's
-    // next lease" instead of unbounded, and the cost is a fairness skew in the rank rather
-    // than lost work -- ranks among live idle shards remain a permutation, so the sizes of
-    // the RUN/WAIT/DONE bands do not change. Closing it properly needs leases in the log,
-    // which is a deliberate non-goal. On the live path this is a no-op -- lease() cleared it.
-    info.idleSince = null;
-    info.completed++;
-    info.lastSeenAt = now;
+    roster.recordCompletion(shard, now);
     touch(now);
   }
 
-  /** A NACK is proof the shard was holding work, so it also ends the idle clock. */
-  void clearIdle(int shard) {
-    ShardInfo info = shards.get(shard);
-    if (info != null) {
-      info.idleSince = null;
-    }
-  }
-
-  void recordNack(NackRequest.NackedLease lease, Instant now) {
+  void recordNack(int shard, NackRequest.NackedLease lease, Instant now) {
+    roster.proofOfWork(shard);
     if (nacks.size() < DIAGNOSTIC_CAP) {
       nacks.add(lease);
     } else {
@@ -553,7 +435,7 @@ final class Session {
   }
 
   void recordStale(ResultRequest request) {
-    clearIdle(request.shard());
+    roster.proofOfWork(request.shard());
     if (staleResults.size() < DIAGNOSTIC_CAP) {
       staleResults.add(request);
     } else {
@@ -562,16 +444,6 @@ final class Session {
   }
 
   SessionView view() {
-    List<SessionView.ShardView> shardViews =
-        shards.entrySet().stream()
-            .map(
-                entry ->
-                    new SessionView.ShardView(
-                        entry.getKey(),
-                        entry.getValue().departed,
-                        entry.getValue().completed,
-                        entry.getValue().released))
-            .toList();
     List<SessionView.TestView> testViews =
         units.entrySet().stream()
             .map(
@@ -589,7 +461,7 @@ final class Session {
         epoch,
         metadata,
         units.size(),
-        shardViews,
+        roster.views(),
         testViews,
         List.copyOf(nacks),
         List.copyOf(staleResults),
@@ -620,13 +492,4 @@ final class Session {
       Instant expiresAt,
       TestState origin,
       int originAttempts) {}
-
-  static final class ShardInfo {
-    boolean departed;
-    boolean explicitlyDeparted;
-    int completed;
-    Instant idleSince;
-    boolean released;
-    Instant lastSeenAt;
-  }
 }
