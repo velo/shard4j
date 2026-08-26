@@ -12,7 +12,7 @@ import java.util.Set;
 
 /**
  * The fair-share hold-back policy for a distributed method's invocations: a pure
- * computation over one method's expanded units, the roster view, the pass and the clock
+ * computation over one method's expanded units, the roster view and the clock
  * -- plus the two facts only this policy cares about, the consumer-declared fleet size
  * and which shards have exhausted their open ask. The session owns the state machine and
  * the roster; this type answers exactly one question: how many more of the method's
@@ -48,6 +48,11 @@ final class FairShare {
     exhausted.add(shard);
   }
 
+  /** Taking work ends the exhaustion, exactly as it ends the idle clock. */
+  void resumed(int shard) {
+    exhausted.remove(shard);
+  }
+
   /** A new attempt's shards all ask afresh; no exhaustion survives the epoch bump. */
   void epochBumped() {
     exhausted.clear();
@@ -55,7 +60,7 @@ final class FairShare {
 
   /**
    * How many more of the method's invocations this shard may lease right now. The cap is
-   * a fair share -- ceil of the pass's eligible invocations over the expected fleet --
+   * a fair share -- ceil of the eligible invocations over the expected fleet --
    * and it binds only while another <em>live</em> shard may still ask: registered, not
    * departed, not released, not exhausted, and not past the pass. The declared
    * {@code shard.count} deliberately cannot make the cap bind: a shard that dies before

@@ -334,6 +334,7 @@ public final class CoordinatorCore {
       session.applyResult(
           request.shard(),
           request.testId(),
+          attempt,
           request.outcome(),
           request.durationMs(),
           reason,
@@ -521,6 +522,7 @@ public final class CoordinatorCore {
     session.applyResult(
         record.shard(),
         record.testId(),
+        record.unitAttempt() == null ? session.attemptsOf(record.testId()) + 1 : record.unitAttempt(),
         record.outcome(),
         record.durationMs(),
         record.reason(),

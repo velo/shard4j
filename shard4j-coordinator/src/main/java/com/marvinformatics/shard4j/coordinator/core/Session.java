@@ -306,48 +306,50 @@ final class Session {
    * shard stands in the hunger queue against how much work exists or could yet exist.
    *
    * <p>Two counts bound how many shards are worth keeping: units claimable right now, and
-   * leases that could still come back as work if they fail. A shard ranked inside the first
-   * is told to RUN; one ranked inside the sum is held as spare capacity; anything past that
-   * is surplus and released.
+   * leases still outstanding. A shard ranked inside the first is told to RUN; one ranked
+   * inside the sum is held as spare capacity; anything past that is surplus and released.
    *
    * <p>That reconciles two rules that look opposed. A finished shard should not cost the
    * fleet the slowest shard's wall time -- but with two shards and one test, releasing the
    * idle one strands the next attempt on the shard that just failed it, because there is
-   * nowhere else for it to go. Sizing the hold to the work rather than releasing on a bare
-   * count keeps a spare for every lease that might return, and no more.
+   * nowhere else for it to go. Sizing the hold to the work keeps a spare for every lease
+   * that might return, and no more.
    *
-   * <p>A lease on its <em>final</em> attempt is excluded from that count: it cannot requeue,
-   * so it can create no work, and holding a shard behind it would park capacity behind
-   * something whose only remaining outcomes are terminal.
+   * <p><strong>Every</strong> outstanding lease counts, including one on its final attempt.
+   * It is tempting to exclude those on the grounds that a final attempt cannot requeue and
+   * so can create no work -- but a lease has three exits, not two. Besides PASSED and
+   * FAILED it can be <em>restored</em>: expiry and NACK both return the unit to PENDING
+   * with the attempt un-spent. Excluding final-attempt leases releases the last spare
+   * exactly when the holder is about to die, which strands the unit with nobody left to
+   * poll and loses the run -- the failure mode this barrier exists to prevent. Holding
+   * costs at most one test's duration; the alternative costs the whole suite.
    */
   BarrierResponse barrierDecision(int shard, Instant now) {
     if (isReleased(shard)) {
       return done();
     }
     int claimable = 0;
-    int mayStillFail = 0;
+    int outstanding = 0;
     Instant earliestLeaseExpiry = null;
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.PENDING) {
         claimable++;
       } else if (unit.state == TestState.LEASED) {
-        if (unit.attempts + 1 < maxAttempts) {
-          mayStillFail++;
-        }
+        outstanding++;
         Instant expiresAt = unit.lease.expiresAt();
         if (earliestLeaseExpiry == null || expiresAt.isBefore(earliestLeaseExpiry)) {
           earliestLeaseExpiry = expiresAt;
         }
       }
     }
-    if (claimable + mayStillFail == 0) {
+    if (claimable + outstanding == 0) {
       return done();
     }
     int rank = hungerRank(shard, now);
     if (rank < claimable) {
       return new BarrierResponse(BarrierResponse.Action.RUN, null, null);
     }
-    if (rank < claimable + mayStillFail) {
+    if (rank < claimable + outstanding) {
       return new BarrierResponse(
           BarrierResponse.Action.WAIT, RETRY_AFTER_SECONDS, earliestLeaseExpiry);
     }
@@ -393,6 +395,7 @@ final class Session {
     // shards that were needed.
     ShardInfo holder = shards.computeIfAbsent(shard, index -> new ShardInfo());
     holder.idleSince = null;
+    fairShare.resumed(shard);
   }
 
   /**
@@ -481,10 +484,17 @@ final class Session {
   }
 
   void applyResult(
-      int shard, String testId, Outcome outcome, long durationMs, String reason, Instant now) {
+      int shard,
+      String testId,
+      int attempt,
+      Outcome outcome,
+      long durationMs,
+      String reason,
+      Instant now) {
     UnitState unit = units.get(testId);
-    unit.records.add(
-        new SessionView.RecordView(unit.attempts + 1, shard, outcome, durationMs, now));
+    // The attempt is handed in rather than recomputed: the caller already derived it to
+    // write the completion log, and two independent derivations of the same ordinal drift.
+    unit.records.add(new SessionView.RecordView(attempt, shard, outcome, durationMs, now));
     switch (outcome) {
       case PASSED -> unit.state = TestState.PASSED;
       case FAILED -> {
@@ -505,6 +515,14 @@ final class Session {
     }
     unit.lease = null;
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    // Also the replay-safe half of the idle lifecycle. Leases are deliberately not logged,
+    // so the clear in lease() exists only in memory: fold the log after a restart and a
+    // shard that idled once and then worked for an hour comes back idle-since-its-first-
+    // barrier, outranking every genuine waiter and getting them released while work is
+    // outstanding. Completions *are* logged, so clearing here makes the reconstruction
+    // "idle since the last SHARD_IDLE after this shard's last completion", which matches
+    // live state. On the live path this is a no-op -- lease() already cleared it.
+    info.idleSince = null;
     info.completed++;
     info.lastSeenAt = now;
     touch(now);

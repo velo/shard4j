@@ -137,10 +137,27 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   private TestExecutionResult downgradeIfRetryable(
       TestDescriptor descriptor, TestExecutionResult result) {
     if (result.getStatus() != TestExecutionResult.Status.FAILED
-        || !retryable.test(ExecutionIdentity.leaseId(descriptor).value())) {
+        || !retryable.test(owningUnitOf(descriptor))) {
       return result;
     }
     return TestExecutionResult.aborted(new RetryPending(result.getThrowable().orElse(null)));
+  }
+
+  /**
+   * The unit this descriptor's outcome belongs to, by the same rule {@link
+   * #executionFinished} applies: a leaf that was itself leased owns its outcome, and
+   * anything below a leased container reports under that container.
+   *
+   * <p>Stripping to the template unconditionally is wrong and silently so. When the
+   * coordinator distributes a parameterized method it leases each invocation separately,
+   * and the grant keeps the {@code [test-template-invocation:#n]} segment -- so a lookup
+   * by the stripped template id misses, every distributed invocation looks non-retryable,
+   * and the downgrade quietly does nothing for the one mode that needs it most. Both
+   * resolutions live here so they cannot drift apart again.
+   */
+  private String owningUnitOf(TestDescriptor descriptor) {
+    String wireId = wireIdOf(descriptor);
+    return leasedUnits.contains(wireId) ? wireId : ExecutionIdentity.leaseId(descriptor).value();
   }
 
   /** Marks a failure the coordinator still owes a retry; never escapes the launcher report. */

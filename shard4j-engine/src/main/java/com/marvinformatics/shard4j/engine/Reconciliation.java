@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The pass epilogue's classification of leases the engine could not explain with a
+ * The drain epilogue's classification of leases the engine could not explain with a
  * terminal outcome, as a pure function over the drained grants -- so the three-way
  * decision and every NACK's wording are unit-testable without a container.
  *
@@ -68,7 +68,7 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
     return new Reconciliation(nacks, failureOf(shardIndex, driftedInvocations, unexplainable));
   }
 
-  /** The wording for leases abandoned wholesale -- a mid-pass failure or a SIGTERM. */
+  /** The wording for leases abandoned wholesale -- a mid-drain failure or a SIGTERM. */
   static List<NackRequest.NackedLease> abandoned(
       List<Grant> outstanding, int shardIndex, String cause) {
     return outstanding.stream()

@@ -159,7 +159,7 @@ public record LogRecord(
 
   /**
    * A shard entering, or re-entering, the roster. Without it a shard that registered but
-   * produced no completion or pass record would vanish from the replayed roster, and every
+   * produced no completion or idle record would vanish from the replayed roster, and every
    * quorum would resolve without it.
    */
   public static LogRecord joined(

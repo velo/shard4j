@@ -224,6 +224,56 @@ class UnitOutcomeListenerTest {
   }
 
   @Test
+  void givenARetryableInvocationLeasedInItsOwnRight_whenItFails_thenTheLauncherStillSeesAborted() {
+    // The regression this pins: resolving the owning unit by stripping to the template is
+    // wrong when the coordinator distributes a method and leases each invocation on its
+    // own -- the grant keeps the invocation segment, a lookup by template id misses, and
+    // the downgrade silently does nothing for the mode that needs it most. The predicate
+    // here is a real id set rather than a constant, which is the only way that can fail.
+    String brokenRow = rowsInvocation(2);
+    JupiterDelegate jupiter = new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID));
+    Set<ExecutionId> leased = Set.of(new ExecutionId(brokenRow));
+    TestDescriptor batch =
+        jupiter.discoverIds(
+            leased.stream().toList(),
+            new MapConfigurationParameters(Map.of()),
+            EngineTestHarness.outputDirectoryCreator());
+
+    Map<String, TestExecutionResult.Status> launcherSaw = new HashMap<>();
+    EngineExecutionListener downstream =
+        new EngineExecutionListener() {
+          @Override
+          public void executionFinished(TestDescriptor descriptor, TestExecutionResult result) {
+            if (descriptor.getUniqueId().toString().endsWith("[test-template-invocation:#2]")) {
+              launcherSaw.put("row", result.getStatus());
+            }
+          }
+        };
+
+    Map<String, UnitResult> reported = new HashMap<>();
+    Set<String> retryableIds = Set.of(brokenRow);
+    UnitOutcomeListener listener =
+        new UnitOutcomeListener(
+            downstream,
+            jupiter.nestedRootId(),
+            false,
+            leased,
+            retryableIds::contains,
+            result -> reported.put(result.unitId().value(), result));
+    jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
+
+    assertThat(launcherSaw)
+        .as("the failing row must have reached the launcher at all")
+        .containsKey("row");
+    assertThat(launcherSaw.get("row"))
+        .as("a leased invocation resolves to itself, not to its template")
+        .isEqualTo(TestExecutionResult.Status.ABORTED);
+    assertThat(reported.get(brokenRow).outcome())
+        .as("the coordinator still hears the truth")
+        .isEqualTo(Outcome.FAILED);
+  }
+
+  @Test
   void givenAFailureWithNoBudgetLeft_whenReported_thenBothSidesSeeFailed() {
     Map.Entry<TestExecutionResult.Status, Outcome> told = failingUnitReportedTo(false);
 

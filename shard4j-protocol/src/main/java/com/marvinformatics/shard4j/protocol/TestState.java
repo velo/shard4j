@@ -4,7 +4,8 @@ package com.marvinformatics.shard4j.protocol;
  * Coordinator-side state of one lease unit.
  *
  * <p>{@code PASSED}, {@code SKIPPED} and {@code ABORTED} are absorbing and all three
- * satisfy the coverage verdict. {@code FAILED} is claimable again in the next pass.
+ * satisfy the coverage verdict. {@code FAILED} is terminal: it means the
+ * attempt budget is spent. A failure with budget left is put back to {@code PENDING}.
  */
 public enum TestState {
   PENDING,
