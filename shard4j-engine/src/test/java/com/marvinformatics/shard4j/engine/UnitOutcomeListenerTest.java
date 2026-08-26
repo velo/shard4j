@@ -3,12 +3,17 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
+import com.marvinformatics.shard4j.protocol.Fence;
+import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.EngineExecutionListener;
@@ -26,6 +31,28 @@ class UnitOutcomeListenerTest {
   private static final String SETUP = AbortedSetupFixture.class.getName();
   private static final String ROWS = RowsFixture.class.getName();
   private static final String SKIPPED_ROW = SkippedRowFixture.class.getName();
+  private static final String BROKEN_SETUP = FailedSetupFixture.class.getName();
+
+  /**
+   * The listener takes the leases the nested execution is running -- one map, not a set of
+   * ids alongside a predicate over the same ids. Only {@code retryable} varies here; the
+   * rest of a grant is what the coordinator would have sent.
+   */
+  private static Map<ExecutionId, Grant> leases(
+      Set<ExecutionId> units, Predicate<String> retryable) {
+    Map<ExecutionId, Grant> leases = new LinkedHashMap<>();
+    units.forEach(
+        unit ->
+            leases.put(
+                unit,
+                new Grant(
+                    unit.value(),
+                    new Fence(1, 1, 1),
+                    Instant.parse("2026-08-20T10:00:00Z"),
+                    false,
+                    retryable.test(unit.value()))));
+    return leases;
+  }
 
   private static String method(String className, String method) {
     return "[engine:junit-jupiter]/[class:" + className + "]/[method:" + method + "]";
@@ -49,8 +76,7 @@ class UnitOutcomeListenerTest {
             EngineExecutionListener.NOOP,
             jupiter.nestedRootId(),
             false,
-            leased,
-            unitId -> false,
+            leases(leased, unitId -> false),
             result -> results.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
     return results;
@@ -199,8 +225,7 @@ class UnitOutcomeListenerTest {
             downstream,
             jupiter.nestedRootId(),
             false,
-            leased,
-            unitId -> retryable,
+            leases(leased, unitId -> retryable),
             result -> reported.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
 
@@ -257,8 +282,7 @@ class UnitOutcomeListenerTest {
             downstream,
             jupiter.nestedRootId(),
             false,
-            leased,
-            retryableIds::contains,
+            leases(leased, retryableIds::contains),
             result -> reported.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
 
@@ -301,8 +325,7 @@ class UnitOutcomeListenerTest {
             EngineExecutionListener.NOOP,
             jupiter.nestedRootId(),
             false,
-            leased,
-            unitId -> false,
+            leases(leased, unitId -> false),
             result -> results.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
 
@@ -310,5 +333,73 @@ class UnitOutcomeListenerTest {
     // and the ghost produced no outcome at all. ShardLoop's reconciliation ledger is what
     // turns that silence into a NACK and a loud failure; ReconciliationIT pins it.
     assertThat(results).containsOnlyKeys(method(PLAIN, "passes()"));
+  }
+
+  /**
+   * Runs the class whose {@code @BeforeAll} throws and returns the status the launcher was
+   * given for the class container, with {@code retryable} deciding what the coordinator
+   * promised for each unit beneath it.
+   */
+  private static TestExecutionResult.Status brokenSetupReportedToLauncher(
+      Predicate<String> retryable) {
+    Set<ExecutionId> leased =
+        Set.of(
+            new ExecutionId(method(BROKEN_SETUP, "first()")),
+            new ExecutionId(method(BROKEN_SETUP, "second()")));
+    JupiterDelegate jupiter = new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID));
+    TestDescriptor batch =
+        jupiter.discoverIds(
+            leased.stream().toList(),
+            new MapConfigurationParameters(Map.of()),
+            EngineTestHarness.outputDirectoryCreator());
+
+    Map<String, TestExecutionResult.Status> launcherSaw = new HashMap<>();
+    EngineExecutionListener downstream =
+        new EngineExecutionListener() {
+          @Override
+          public void executionFinished(TestDescriptor descriptor, TestExecutionResult result) {
+            if (descriptor.getUniqueId().toString().endsWith("[class:" + BROKEN_SETUP + "]")) {
+              launcherSaw.put("class", result.getStatus());
+            }
+          }
+        };
+
+    Map<String, UnitResult> reported = new HashMap<>();
+    UnitOutcomeListener listener =
+        new UnitOutcomeListener(
+            downstream,
+            jupiter.nestedRootId(),
+            false,
+            leases(leased, retryable),
+            result -> reported.put(result.unitId().value(), result));
+    jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
+
+    // Whatever the launcher was told, the coordinator always hears the truth about both
+    // units -- that is the direction the downgrade must never travel.
+    assertThat(reported)
+        .containsOnlyKeys(method(BROKEN_SETUP, "first()"), method(BROKEN_SETUP, "second()"));
+    assertThat(reported.values()).allSatisfy(r -> assertThat(r.outcome()).isEqualTo(Outcome.FAILED));
+    assertThat(launcherSaw).as("the class container must have reached the launcher").containsKey("class");
+    return launcherSaw.get("class");
+  }
+
+  /**
+   * The regression this pins: a {@code @BeforeAll} failure emits no leaf events at all, so
+   * the class container is the only event that can carry the downgrade. Deciding per
+   * descriptor rather than per explained unit left the container out, and a build reddened
+   * while every unit under it was about to be retried.
+   */
+  @Test
+  void givenABeforeAllFailureWithBudgetLeft_whenReported_thenTheLauncherSeesTheClassAborted() {
+    assertThat(brokenSetupReportedToLauncher(unitId -> true))
+        .as("every unit beneath is still owed a retry, so the class must not redden")
+        .isEqualTo(TestExecutionResult.Status.ABORTED);
+  }
+
+  @Test
+  void givenABeforeAllFailureWithOneUnitOutOfBudget_whenReported_thenTheClassStillReddens() {
+    assertThat(brokenSetupReportedToLauncher(method(BROKEN_SETUP, "first()")::equals))
+        .as("one unit out of budget makes the setup failure terminal for the class")
+        .isEqualTo(TestExecutionResult.Status.FAILED);
   }
 }

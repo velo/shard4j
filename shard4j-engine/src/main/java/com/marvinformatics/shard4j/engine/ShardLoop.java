@@ -18,17 +18,15 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-import lombok.AccessLevel;
-import lombok.RequiredArgsConstructor;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
 
 /**
- * The coordinated loop, inside one {@code execute()} call: register the
- * census, ask the coordinator what to run next and drain each class it names, run each
- * grant through a nested Jupiter execution, report every unit as it completes, reconcile,
- * and hold at the barrier -- returning to claim whenever the barrier says RUN, so a unit
- * another shard requeued is picked up here rather than needing a second failsafe block.
+ * The coordinated loop, inside one {@code execute()} call: register the census, ask the
+ * coordinator what to run next and drain each class it names, run each grant through a
+ * nested Jupiter execution, report every unit as it completes, reconcile, and hold at the
+ * barrier -- returning to claim whenever the barrier says RUN, so a unit another shard
+ * requeued is picked up here rather than needing a second failsafe block.
  *
  * <p>{@code shard.concurrency} slots run this pull loop side by side, each draining its
  * own class through its own nested execution -- so {@code @BeforeAll} stays a once-per-
@@ -38,8 +36,12 @@ import org.junit.platform.engine.TestDescriptor;
  * class, never a slice of the class the first slot is already draining. The barrier is
  * reached only after every slot has finished, so a shard is still exactly one unit of
  * quorum arithmetic no matter how many slots it ran.
+ *
+ * <p>Two scopes matter and they are not the same. A {@link Drain} is one lap of that loop
+ * and owns everything a later lap must not inherit; a {@link Slot} is a worker for the
+ * life of the JVM, because the cold-start bill it tracks is paid once per JVM and not once
+ * per lap.
  */
-@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 final class ShardLoop {
 
   private static final System.Logger log = System.getLogger(ShardLoop.class.getName());
@@ -50,14 +52,16 @@ final class ShardLoop {
   /** How long past a lease expiry the coordinator is given to have acted on it. */
   private static final Duration LEASE_EXPIRY_GRACE = Duration.ofSeconds(30);
 
+  /** The poll cadence to use when the coordinator's answer names none. */
+  private static final int DEFAULT_RETRY_AFTER_SECONDS = 5;
+
   private final ShardConfiguration configuration;
   private final JupiterDelegate jupiter;
   private final CoordinatorGateway gateway;
   private final ExecutionRequest request;
+  private final List<Slot> slots;
 
   private final LeaseLedger ledger = new LeaseLedger();
-  private final Map<String, Outcome> outcomes =
-      Collections.synchronizedMap(new LinkedHashMap<>());
 
   /**
    * Serialises ask-and-drain across slots so each ask sees a fully-leased predecessor.
@@ -81,7 +85,21 @@ final class ShardLoop {
    */
   private final ConcurrentHashMap<String, ReentrantLock> classLocks = new ConcurrentHashMap<>();
 
-  private final SlotScheduler scheduler = new SlotScheduler();
+  ShardLoop(
+      ShardConfiguration configuration,
+      JupiterDelegate jupiter,
+      CoordinatorGateway gateway,
+      ExecutionRequest request) {
+    this.configuration = configuration;
+    this.jupiter = jupiter;
+    this.gateway = gateway;
+    this.request = request;
+    List<Slot> built = new ArrayList<>();
+    for (int slot = 0; slot < configuration.concurrency(); slot++) {
+      built.add(new Slot());
+    }
+    this.slots = List.copyOf(built);
+  }
 
   void run(DiscoveredCensus census) {
     gateway.register();
@@ -101,25 +119,11 @@ final class ShardLoop {
       // shard's own pull loop -- which is exactly the path that is gone when it dies.
       BarrierResponse verdict;
       do {
-        // Per drain, not per execution: the mass-abort guard asks whether *this* drain was
-        // wholly aborted across more than one class. Left accumulating across iterations,
-        // two separate drains each with one legitimate single-class abort would jointly
-        // trip a heuristic meant to catch a broken environment.
-        outcomes.clear();
-        claimAndRunUntilDrained(census);
+        Drain drain = Drain.start();
+        claimAndRunUntilDrained(census, drain);
         reconcileOrFail();
-        failOnMassAbort();
-        verdict = holdAtBarrier(keepalive);
-        // RUN with nothing drained is not a contradiction: the barrier counts every PENDING
-        // unit, including ones this shard may not be granted because its fair share of a
-        // distributed method is already spent. Re-asking immediately turns that into a tight
-        // loop against the coordinator's single write lock, for as long as the shard holding
-        // the balance takes to finish -- minutes, and invisible to any test because it always
-        // resolves eventually. Waiting out the coordinator's own cadence costs nothing: if
-        // there were work here for this shard, it would have been drained.
-        if (verdict.action() == BarrierResponse.Action.RUN && outcomes.isEmpty()) {
-          sleepSeconds(verdict.retryAfterSeconds() == null ? 5 : verdict.retryAfterSeconds());
-        }
+        failOnMassAbort(drain.outcomes());
+        verdict = holdAtBarrier(keepalive, drain.ranNothing());
       } while (verdict.action() == BarrierResponse.Action.RUN);
     } catch (RuntimeException | Error e) {
       // An abnormal exit must never abandon leases to the TTL: healthy shards would sit
@@ -138,6 +142,27 @@ final class ShardLoop {
   }
 
   /**
+   * One lap of the loop, and everything a later lap must not inherit.
+   *
+   * <p>The outcomes are per drain because the mass-abort guard asks whether <em>this</em>
+   * drain was wholly aborted across more than one class: left accumulating, two drains each
+   * carrying one legitimate single-class abort would jointly trip a heuristic that exists
+   * to catch a broken environment. The scheduler is per drain because its stop-pulling flag
+   * is one-shot and never reset, so a flag raised by one drain's slot failure would silently
+   * no-op every drain after it.
+   */
+  private record Drain(SlotScheduler scheduler, Map<String, Outcome> outcomes) {
+
+    static Drain start() {
+      return new Drain(new SlotScheduler(), Collections.synchronizedMap(new LinkedHashMap<>()));
+    }
+
+    boolean ranNothing() {
+      return outcomes.isEmpty();
+    }
+  }
+
+  /**
    * Returns every still-outstanding lease to the pool, naming the cause. Reached from
    * three places -- the mid-drain failure path, the SIGTERM shutdown hook, and never twice:
    * the ledger's snapshot-and-clear makes a second call a no-op, so the hook cannot
@@ -145,8 +170,7 @@ final class ShardLoop {
    */
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
-        Reconciliation.abandoned(
-            ledger.drainAll(), configuration.shardIndex(), cause);
+        Reconciliation.abandoned(ledger.drainAll(), configuration.shardIndex(), cause);
     if (nacks.isEmpty()) {
       return;
     }
@@ -162,23 +186,25 @@ final class ShardLoop {
   }
 
   /**
-   * Runs the pull loop on {@code shard.concurrency} slots and surfaces the first slot
-   * failure; the shared failure path then NACKs whatever any slot still holds.
+   * Runs the pull loop on every slot and surfaces the first slot failure; the shared
+   * failure path then NACKs whatever any slot still holds.
    */
-  private void claimAndRunUntilDrained(DiscoveredCensus census) {
-    List<Runnable> slotLoops = new ArrayList<>();
-    for (int slot = 0; slot < configuration.concurrency(); slot++) {
-      Slot drainSlot = new Slot();
-      slotLoops.add(() -> drainSlot.pullUntilDrained(census));
-    }
-    scheduler.runToCompletion(slotLoops);
+  private void claimAndRunUntilDrained(DiscoveredCensus census, Drain drain) {
+    List<Runnable> slotLoops =
+        slots.stream().<Runnable>map(slot -> () -> slot.pullUntilDrained(census, drain)).toList();
+    drain.scheduler().runToCompletion(slotLoops);
   }
 
   /**
-   * One drain slot: the pull loop plus the slot-local state it needs. Cold-start
-   * exclusion is per slot, not per shard: on a cold JVM every slot's first unit pays the
-   * JIT and classloading bill at the same moment, and an unflagged one would record that
-   * bill into the duration history driving slowest-first.
+   * One drain slot, for the life of the JVM rather than of a drain. Cold-start exclusion is
+   * per slot, not per shard: on a cold JVM every slot's first unit pays the JIT and
+   * classloading bill at the same moment, and an unflagged one would record that bill into
+   * the duration history driving slowest-first.
+   *
+   * <p>It is per <em>JVM</em> for the mirror-image reason. Rebuilding the slot for the
+   * second drain would raise the flag again on a warm JVM, and the duration store excludes
+   * first-on-shard rows from its median -- so a good measurement would be discarded for
+   * exactly the units a retry touches, which are the ones with the least history to spare.
    */
   private final class Slot {
 
@@ -186,7 +212,7 @@ final class ShardLoop {
 
     /**
      * The slot's pull loop, until the coordinator answers the open ask with nothing --
-     * the terminal state for this shard. Each ask hands back the class the coordinator
+     * the terminal state for this drain. Each ask hands back the class the coordinator
      * wants run next, chosen by its own schedule with the first batch of leases attached;
      * the slot drains that class before running it, and the whole ask-and-drain is one
      * critical section across slots -- so a concurrent ask ranks a pool with the named
@@ -194,8 +220,8 @@ final class ShardLoop {
      * slice of this one. A class the coordinator never names is never entered at all: no
      * nested discovery, no {@code @BeforeAll}, no class initialiser.
      */
-    void pullUntilDrained(DiscoveredCensus census) {
-      while (!scheduler.pullingStopped()) {
+    void pullUntilDrained(DiscoveredCensus census, Drain drain) {
+      while (!drain.scheduler().pullingStopped()) {
         String className;
         List<Grant> drained;
         synchronized (dispatchLock) {
@@ -211,7 +237,7 @@ final class ShardLoop {
           drained = new ArrayList<>(next.granted());
           drained.addAll(drainClass(census.classNamed(className)));
         }
-        runExclusively(className, drained);
+        runExclusively(className, drained, drain);
       }
     }
 
@@ -228,7 +254,7 @@ final class ShardLoop {
      * refresh: the wire has no refresh call, and adding one would let a wedged slot
      * extend its hold indefinitely, which the TTL exists to bound.
      */
-    private void runExclusively(String className, List<Grant> grants) {
+    private void runExclusively(String className, List<Grant> grants, Drain drain) {
       ReentrantLock classLock = classLocks.computeIfAbsent(className, name -> new ReentrantLock());
       try {
         classLock.lockInterruptibly();
@@ -237,24 +263,22 @@ final class ShardLoop {
         throw new ShardExecutionException("Interrupted while waiting to enter " + className);
       }
       try {
-        runBatch(className, grants);
+        runBatch(className, grants, drain);
       } finally {
         classLock.unlock();
       }
     }
 
-    private void runBatch(String className, List<Grant> grants) {
-      Map<String, Grant> byUnit = new LinkedHashMap<>();
-      grants.forEach(grant -> byUnit.put(grant.testId(), grant));
+    private void runBatch(String className, List<Grant> grants, Drain drain) {
       // Order is the coordinator's schedule end to end: it chose this class over every
       // other on the open ask, and within the class the grants arrived slowest-first.
       // The nested discovery receives that order intact rather than re-shuffled by a
       // hash-ordered set.
-      List<ExecutionId> leased =
-          byUnit.keySet().stream().map(unitId -> classRootedLease(className, unitId)).toList();
+      Map<ExecutionId, Grant> leases = new LinkedHashMap<>();
+      grants.forEach(grant -> leases.put(classRootedLease(className, grant.testId()), grant));
       TestDescriptor batch =
           jupiter.discoverIds(
-              leased,
+              List.copyOf(leases.keySet()),
               request.getConfigurationParameters(),
               request.getOutputDirectoryCreator());
       UnitOutcomeListener listener =
@@ -262,21 +286,17 @@ final class ShardLoop {
               request.getEngineExecutionListener(),
               jupiter.nestedRootId(),
               false,
-              Set.copyOf(leased),
-              unitId -> {
-                Grant grant = byUnit.get(unitId);
-                return grant != null && grant.retryable();
-              },
-              result -> reportCompleted(byUnit, result));
+              leases,
+              result -> reportCompleted(leases, result, drain));
       jupiter.execute(batch, request, listener);
     }
 
-    private void reportCompleted(Map<String, Grant> byUnit, UnitResult result) {
-      Grant grant = byUnit.get(result.unitId().value());
+    private void reportCompleted(Map<ExecutionId, Grant> leases, UnitResult result, Drain drain) {
+      Grant grant = leases.get(result.unitId());
       boolean firstOnShard = firstResultPending.getAndSet(false);
       gateway.report(grant.fence(), result, firstOnShard);
       ledger.explain(result.unitId().value(), grant.fence());
-      outcomes.put(result.unitId().value(), result.outcome());
+      drain.outcomes().put(result.unitId().value(), result.outcome());
     }
   }
 
@@ -355,7 +375,7 @@ final class ShardLoop {
    * per-JVM latch converting the whole shard's work into aborts would otherwise read as a
    * tidy green that executed nothing.
    */
-  private void failOnMassAbort() {
+  private void failOnMassAbort(Map<String, Outcome> outcomes) {
     if (!configuration.allLeasedAbortedIsFailure() || outcomes.isEmpty()) {
       return;
     }
@@ -380,16 +400,30 @@ final class ShardLoop {
    * coordinator's cadence, which doubles as proof of life. DONE means stop pulling -- the
    * verdict, not this shard's exit code, decides the run. RUN means work arrived while this
    * shard was idle, and the caller loops back to claim it.
+   *
+   * <p>RUN after a drain that ran nothing is not a contradiction: the barrier counts every
+   * PENDING unit, including ones this shard may not be granted because its fair share of a
+   * distributed method is already spent. Returning straight away turns that into a tight
+   * loop against the coordinator's single write lock, for as long as the shard holding the
+   * balance takes to finish -- minutes, and invisible to any test because it always
+   * resolves eventually. Waiting out the coordinator's own cadence first costs nothing: if
+   * there were work here for this shard, the drain would have found it.
    */
-  private BarrierResponse holdAtBarrier(LivenessKeepalive keepalive) {
+  private BarrierResponse holdAtBarrier(LivenessKeepalive keepalive, boolean drainRanNothing) {
     while (true) {
       BarrierResponse response = gateway.barrier();
       switch (response.action()) {
-        case RUN, DONE -> {
+        case DONE -> {
+          return response;
+        }
+        case RUN -> {
+          if (drainRanNothing) {
+            sleepSeconds(cadenceOf(response));
+          }
           return response;
         }
         case WAIT -> {
-          int retryAfter = response.retryAfterSeconds() == null ? 5 : response.retryAfterSeconds();
+          int retryAfter = cadenceOf(response);
           if (!keepWaiting(retryAfter, response.earliestLeaseExpiry())) {
             log.log(
                 System.Logger.Level.INFO,
@@ -409,6 +443,13 @@ final class ShardLoop {
         }
       }
     }
+  }
+
+  /** The coordinator's poll cadence, or the engine's fallback when the answer names none. */
+  private static int cadenceOf(BarrierResponse response) {
+    return response.retryAfterSeconds() == null
+        ? DEFAULT_RETRY_AFTER_SECONDS
+        : response.retryAfterSeconds();
   }
 
   /**

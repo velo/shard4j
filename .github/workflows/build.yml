@@ -33,10 +33,10 @@ jobs:
       - name: Build reactor
         run: mvn -B -ntp verify
 
-  # The invocation every real consumer uses -- failsafe's coordinated profile with its
-  # per-pass forked JVMs -- against a live coordinator container. The in-JVM harness runs
-  # three shards inside one launcher process, so fork boundaries, per-pass JVMs and the
-  # summary/report plumbing are all invisible to it; this job is where they break loudly.
+  # The invocation every real consumer uses -- failsafe's coordinated profile in its own
+  # forked JVM -- against a live coordinator container. The in-JVM harness runs three
+  # shards inside one launcher process, so the fork boundary and the summary/report
+  # plumbing are invisible to it; this job is where they break loudly.
   coordinated-profile:
     runs-on: ubuntu-latest
     steps:
@@ -82,13 +82,13 @@ jobs:
             -Dshard.index=0
 
       # A green profile that executed nothing is the silent-green shape this repository
-      # exists to delete: the main pass's summary must show real completed tests.
-      - name: Assert the main pass ran tests
+      # exists to delete: the summary must show real completed tests.
+      - name: Assert the coordinated profile ran tests
         run: |
-          summary=shard4j-example/target/failsafe-reports/main/failsafe-summary.xml
+          summary=shard4j-example/target/failsafe-reports/failsafe-summary.xml
           test -f "$summary" || { echo "missing $summary" >&2; exit 1; }
           completed=$(sed -n 's/.*<completed>\([0-9][0-9]*\)<\/completed>.*/\1/p' "$summary")
-          echo "main pass completed: ${completed:-0}"
+          echo "coordinated run completed: ${completed:-0}"
           test "${completed:-0}" -ge 1
 
       - name: Stop the coordinator

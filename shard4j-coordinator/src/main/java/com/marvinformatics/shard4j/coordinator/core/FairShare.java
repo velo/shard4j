@@ -1,22 +1,19 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
-import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
  * The fair-share hold-back policy for a distributed method's invocations: a pure
- * computation over one method's expanded units, the roster view and the clock
- * -- plus the two facts only this policy cares about, the consumer-declared fleet size
- * and which shards have exhausted their open ask. The session owns the state machine and
- * the roster; this type answers exactly one question: how many more of the method's
- * invocations may this shard lease right now.
+ * computation over one method's expanded units, the live roster and the clock -- plus the
+ * two facts only this policy cares about, the consumer-declared fleet size and which shards
+ * have exhausted their open ask. {@link Session} owns the state machine and
+ * {@link ShardRoster} owns liveness; this type answers exactly one question: how many more
+ * of the method's invocations may this shard lease right now.
  */
 final class FairShare {
 
@@ -26,12 +23,12 @@ final class FairShare {
   // boots can never strand a unit.
   static final Duration FLEET_ARRIVAL_WINDOW = Duration.ofSeconds(60);
 
-  private final Map<Integer, Session.ShardInfo> roster;
+  private final ShardRoster roster;
   private final Instant createdAt;
   private final Set<Integer> exhausted = new HashSet<>();
   private int declaredShardCount;
 
-  FairShare(Map<Integer, Session.ShardInfo> roster, Instant createdAt) {
+  FairShare(ShardRoster roster, Instant createdAt) {
     this.roster = roster;
     this.createdAt = createdAt;
   }
@@ -90,15 +87,20 @@ final class FairShare {
       }
       // Absorbed units still count toward the denominator: the share this shard has
       // already taken of a method's invocations is what makes the next ask fair. With
-      // passes gone, "already run" is session-wide rather than per-pass, which is the
-      // same quantity the pass-era code was reaching for one pass at a time.
-      SessionView.RecordView latest =
-          unit.records.isEmpty() ? null : unit.records.get(unit.records.size() - 1);
-      if (latest != null) {
-        eligible++;
-        if (latest.shard() == shard) {
-          mine++;
-        }
+      // passes gone, "already run" is session-wide rather than per-pass.
+      //
+      // A unit is charged to every shard that ran it, not merely to the last one. Retries
+      // are what makes those differ: a shard that failed an invocation another shard then
+      // passed did consume a hand-out of this method, and un-charging it would let it take
+      // the next one straight back -- which is exactly the spreading this cap exists to
+      // enforce. The two counts are per shard and never compared to each other, so
+      // charging one unit to two shards is well-defined.
+      if (unit.records.isEmpty()) {
+        continue;
+      }
+      eligible++;
+      if (unit.records.stream().anyMatch(record -> record.shard() == shard)) {
+        mine++;
       }
     }
     int share = Math.ceilDiv(eligible, expectedFleet(now));
@@ -106,9 +108,7 @@ final class FairShare {
   }
 
   private int expectedFleet(Instant now) {
-    int active =
-        (int) roster.values().stream().filter(info -> !info.departed && !info.released).count();
-    int fleet = Math.max(1, active);
+    int fleet = Math.max(1, roster.live().size());
     if (withinArrivalWindow(now)) {
       fleet = Math.max(fleet, declaredShardCount);
     }
@@ -116,13 +116,8 @@ final class FairShare {
   }
 
   private boolean othersMayStillClaim(int shard) {
-    return roster.entrySet().stream()
-        .anyMatch(
-            entry ->
-                entry.getKey() != shard
-                    && !entry.getValue().departed
-                    && !entry.getValue().released
-                    && !exhausted.contains(entry.getKey()));
+    return roster.live().stream()
+        .anyMatch(other -> other != shard && !exhausted.contains(other));
   }
 
   private boolean withinArrivalWindow(Instant now) {

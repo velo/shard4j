@@ -7,8 +7,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -23,14 +21,14 @@ class FairShareTest {
       "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
           + "/[test-template:rows(java.lang.String)]";
 
-  private final Map<Integer, Session.ShardInfo> roster = new TreeMap<>();
+  private final ShardRoster roster = new ShardRoster();
 
   private FairShare fairShare() {
     return new FairShare(roster, CREATED);
   }
 
   private void liveShard(int index) {
-    roster.put(index, new Session.ShardInfo());
+    roster.join(index, CREATED);
   }
 
   private static List<Session.UnitState> pendingUnits(int count) {

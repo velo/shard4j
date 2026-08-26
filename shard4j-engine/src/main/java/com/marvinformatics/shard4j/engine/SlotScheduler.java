@@ -17,12 +17,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class SlotScheduler {
 
-  /** One slot's failure stops the others from pulling new classes; they finish what they hold. */
-  // One-shot and never reset, which ShardLoop.run() now depends on: it re-enters the
-  // drain whenever the barrier says RUN, and a flag left set from an earlier pass would
-  // silently no-op every drain after it. Safe only because every path that sets it also
-  // escorts a throw out of runToCompletion, so a normal return can never carry it. If a
-  // future path sets it without throwing, build a fresh SlotScheduler per drain instead.
+  /**
+   * One slot's failure stops the others from pulling new classes; they finish what they
+   * hold. One-shot and never reset, which is why a scheduler belongs to a single drain:
+   * {@link ShardLoop} builds a fresh one per lap rather than depending on the flag having
+   * stayed down.
+   */
   private final AtomicBoolean stopPulling = new AtomicBoolean();
 
   boolean pullingStopped() {

@@ -50,15 +50,20 @@ the engine were not there. In the CI profile, failsafe's
 `<excludeJUnit5Engines>junit-jupiter</excludeJUnit5Engines>` hands the suite to this
 engine instead, which delegates discovery and execution back to Jupiter while pulling
 work from the coordinator one class-batch at a time. `shard4j-example/pom.xml`'s
-`coordinated` profile is the complete, working integration: three `integration-test`
-executions (`main`, `retry1`, `retry2`), each with its own summary file and reports
-directory, and one `verify` per pass -- per pass, because an execution that claimed
-nothing writes no summary file at all, and a single aggregating verify would fail on the
-missing file exactly on the healthy early-release path.
+`coordinated` profile is the complete, working integration, and it is deliberately **one**
+`integration-test` execution and one `verify`. Retries happen inside it: a failure with
+attempt budget left returns to the coordinator's claimable queue and is handed to whoever
+asks next, so there is no second execution block to come back in through.
 
-A shard's exit code is not the run's verdict; the coordinator's coverage verdict is. A
-test that failed in `main` and passed in `retry1` still leaves a failure in `main`'s
-summary, so a shard job can exit non-zero on a session the coordinator judges green.
+A shard's exit code is not the run's verdict; the coordinator's coverage verdict is. The
+engine narrows the gap rather than closing it: a failure the coordinator will requeue is
+reported to the launcher as *aborted*, so a still-recoverable failure does not redden the
+summary and only an exhausted attempt budget does. What the coordinator is told is always
+the real outcome -- the coverage verdict counts aborted as terminal-OK, so downgrading in
+that direction would turn a genuine failure into passing coverage. A shard job can still
+exit non-zero on a session the coordinator judges green, for everything that is not a
+retryable unit failure: an engine error, a mass-abort failure, a reconciliation failure,
+an `@AfterAll` that throws after its class's tests all passed.
 The one safe way to wire that up is a **non-gating shard job**: every shard job reports
 its own exit honestly, and the pipeline gates on a final step that reads the
 coordinator's verdict for the session. Do not reconcile the two with failsafe's
@@ -127,7 +132,6 @@ system properties) first, then environment variables (`shard.foo.bar` maps to
 | `SHARD_COORDINATOR_SECRET` | yes | **Environment variable only.** A value supplied as a system property is refused: properties appear in `ps` output and argLine echoes. |
 | `shard.session.id` | yes | Run-scoped id minted upstream of the shards, so every shard reads one value and a partial re-run rejoins. |
 | `shard.index` | yes | 0-based shard index. |
-| `shard.pass` | yes | `main` \| `retry1` \| `retry2`, one per execution block. |
 | `shard.attempt` | no (`1`) | Monotonic re-run counter; a higher value voids the previous attempt's leases. |
 | `shard.concurrency` | no (`1`) | Drain slots per shard: how many classes run at once in this JVM. Above 1, read the in-shard parallelism contract below. |
 | `shard.count` | no | Total shards this run launched. A balancing hint only -- it lets the coordinator hold back a fair share of a parameterized method's invocations for shards that have not registered yet, instead of granting them all to whichever shard asked first. Never part of any quorum. |
@@ -149,14 +153,16 @@ intervals is presumed dead and dropped from barrier quorums. The engine honours 
 second rule with a background keepalive that pings an empty claim every five seconds for
 the whole of `execute()`, covering the gaps a real suite has -- a slow `@AfterAll`
 between classes, a long class setup before the first result -- where it would otherwise
-be silent while holding nothing. That coverage stops at the edges of `execute()`: between
-the per-pass executions the shard is a JVM tearing down and a fresh fork spinning up --
-classpath scan, discovery of the next pass -- holding no lease and sending nothing, and on
-a large consumer classpath that gap can outlast the coordinator's 15-second presumed-death
-tolerance. The consequence is a premature presumed death: a degraded rebalance that
-self-heals on the shard's next call, so the outcome is red or correct, never a false
-green. The engine cannot close this gap, because the shard genuinely is not running
-during it.
+be silent while holding nothing. That coverage stops at the edges of `execute()`, so a
+consumer who declares more than one coordinated `integration-test` execution leaves a gap
+between them where the shard is a JVM tearing down and a fresh fork spinning up --
+classpath scan, discovery -- holding no lease and sending nothing; on a large consumer
+classpath that gap can outlast the coordinator's 15-second presumed-death tolerance. The
+consequence is a premature presumed death: a degraded rebalance that self-heals on the
+shard's next call, so the outcome is red or correct, never a false green. The engine
+cannot close this gap, because the shard genuinely is not running during it. One execution
+is the configuration that has no such gap, which is why the example profile declares
+exactly one.
 
 ## In-shard parallelism
 
@@ -298,9 +304,13 @@ Draining a class grants all of its leases up front, so the lease TTL must cover 
 slowest class share, not merely its slowest single test -- and roughly two class shares
 once `shard.concurrency` exceeds 1 (see the in-shard parallelism contract).
 
-Retries are additional passes over the session, not in-place re-runs: a failure leaves the
-test claimable again in the next pass, on whichever shard asks first, and there are at
-most three passes.
+Retries are re-queues, not in-place re-runs and not extra passes over the session: a
+failure with attempt budget left puts the unit straight back on the claimable queue, where
+whichever shard asks next takes it -- usually not the one that just failed it, which is the
+point. `COORDINATOR_MAX_ATTEMPTS` (default 3) bounds the attempts per unit; the last one
+has nothing behind it and its failure is terminal. Because the requeue lands inside the
+same execution, a shard that has run out of work waits at the barrier rather than exiting,
+and is released only once it cannot be needed.
 
 The verdict is coverage, never exit codes and never queue emptiness: a session passes only
 when every registered test reached a terminal non-failing state. If every shard departs

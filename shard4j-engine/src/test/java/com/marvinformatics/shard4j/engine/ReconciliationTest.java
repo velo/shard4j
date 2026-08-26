@@ -19,7 +19,7 @@ class ReconciliationTest {
       "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]/[method:plain()]";
 
   private static Grant grant(String testId, boolean probe) {
-    return new Grant(testId, new Fence(1, 1, 1), Instant.parse("2026-08-20T10:00:00Z"), probe, 3);
+    return new Grant(testId, new Fence(1, 1, 1), Instant.parse("2026-08-20T10:00:00Z"), probe, true);
   }
 
   private static String invocation(int position) {

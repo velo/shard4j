@@ -1,18 +1,19 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
+import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.TestExecutionResult;
@@ -45,8 +46,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   private final EngineExecutionListener downstream;
   private final UniqueId nestedRootId;
   private final boolean forwardEngineNode;
-  private final Set<String> leasedUnits;
-  private final Predicate<String> retryable;
+  private final Map<String, Grant> leases;
   private final Consumer<UnitResult> onUnitComplete;
 
   private final Map<String, UnitResult> finalized = new HashMap<>();
@@ -57,15 +57,13 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       EngineExecutionListener downstream,
       UniqueId nestedRootId,
       boolean forwardEngineNode,
-      Set<ExecutionId> leasedUnits,
-      Predicate<String> retryable,
+      Map<ExecutionId, Grant> leases,
       Consumer<UnitResult> onUnitComplete) {
     this.downstream = downstream;
     this.nestedRootId = nestedRootId;
     this.forwardEngineNode = forwardEngineNode;
-    this.retryable = retryable;
-    this.leasedUnits = new HashSet<>();
-    leasedUnits.forEach(unit -> this.leasedUnits.add(unit.value()));
+    this.leases = new LinkedHashMap<>();
+    leases.forEach((unit, grant) -> this.leases.put(unit.value(), grant));
     this.onUnitComplete = onUnitComplete;
   }
 
@@ -89,7 +87,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   public synchronized void executionSkipped(TestDescriptor descriptor, String reason) {
     String effective = orUnexplained(reason, "skipped");
     String wireId = wireIdOf(descriptor);
-    if (leasedUnits.contains(wireId)) {
+    if (leases.containsKey(wireId)) {
       finalize(wireId, Outcome.SKIPPED, 0, effective, invocationsByUnit.get(wireId));
     } else if (isInvocation(descriptor)) {
       recordInvocation(descriptor, Outcome.SKIPPED, 0, effective);
@@ -108,56 +106,61 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       TestDescriptor descriptor, TestExecutionResult result) {
     long durationMs = elapsedMs(descriptor);
     String wireId = wireIdOf(descriptor);
-    if (leasedUnits.contains(wireId)) {
+    // The units this one event explains, resolved once. Three shapes, and the resolution is
+    // not obvious enough to be worth deriving twice: a leased leaf owns its own outcome, an
+    // invocation reports under the template that was leased whole, and a container that
+    // emitted nothing for its children explains every unit beneath it.
+    Set<String> explained;
+    if (leases.containsKey(wireId)) {
       finalizeUnit(descriptor, wireId, result, durationMs);
+      explained = Set.of(wireId);
     } else if (isInvocation(descriptor)) {
       recordInvocation(descriptor, outcomeOf(result), durationMs, messageOf(result, null));
+      String template = ExecutionIdentity.leaseId(descriptor).value();
+      explained = leases.containsKey(template) ? Set.of(template) : Set.of();
     } else if (result.getStatus() != TestExecutionResult.Status.SUCCESSFUL) {
       // The @BeforeAll shapes: the container ends aborted or failed having emitted nothing
       // for its children, and the abort does not propagate upward -- so this is the only
       // event from which those units can ever be explained.
       Outcome outcome =
           result.getStatus() == TestExecutionResult.Status.ABORTED ? Outcome.ABORTED : Outcome.FAILED;
-      fillUnitsBeneath(
-          wireId, outcome, prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))));
+      explained =
+          fillUnitsBeneath(
+              wireId, outcome, prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))));
+    } else {
+      explained = Set.of();
     }
     if (forward(descriptor)) {
-      downstream.executionFinished(descriptor, downgradeIfRetryable(descriptor, result));
+      downstream.executionFinished(descriptor, downgradeIfRetryable(result, explained));
     }
   }
 
   /**
-   * A failure the coordinator will requeue is reported to the *launcher* as aborted, so a
-   * shard stays green while a retry is still owed and only an exhausted budget reddens it.
-   * This rewrite is one-directional on purpose: {@link #finalize} above has already handed
-   * the coordinator the real FAILED, and it must keep doing so -- the coverage verdict
-   * counts ABORTED as terminal-OK, so downgrading toward the coordinator would convert a
-   * genuine failure into passing coverage.
+   * A failure the coordinator will requeue is reported to the <em>launcher</em> as aborted,
+   * so a shard stays green while a retry is still owed and only an exhausted budget reddens
+   * it. The decision is taken over the units the event explained, which is what carries the
+   * downgrade to a {@code @BeforeAll} failure: the class container explains every unit
+   * beneath it and Jupiter emits no leaf events at all in that shape, so a container left
+   * un-downgraded reddens a build whose every unit is about to be retried.
+   *
+   * <p>A container is downgraded only when <em>every</em> unit it explained is still
+   * retryable. One unit out of budget makes the setup failure terminal for the class, and
+   * the launcher must see that.
+   *
+   * <p>One-directional on purpose: {@link #finalize} has already handed the coordinator the
+   * real FAILED, and it must keep doing so -- the coverage verdict counts ABORTED as
+   * terminal-OK, so downgrading toward the coordinator would convert a genuine failure into
+   * passing coverage.
    */
   private TestExecutionResult downgradeIfRetryable(
-      TestDescriptor descriptor, TestExecutionResult result) {
-    if (result.getStatus() != TestExecutionResult.Status.FAILED
-        || !retryable.test(owningUnitOf(descriptor))) {
+      TestExecutionResult result, Set<String> explained) {
+    if (result.getStatus() != TestExecutionResult.Status.FAILED || explained.isEmpty()) {
+      return result;
+    }
+    if (!explained.stream().allMatch(unit -> leases.get(unit).retryable())) {
       return result;
     }
     return TestExecutionResult.aborted(new RetryPending(result.getThrowable().orElse(null)));
-  }
-
-  /**
-   * The unit this descriptor's outcome belongs to, by the same rule {@link
-   * #executionFinished} applies: a leaf that was itself leased owns its outcome, and
-   * anything below a leased container reports under that container.
-   *
-   * <p>Stripping to the template unconditionally is wrong and silently so. When the
-   * coordinator distributes a parameterized method it leases each invocation separately,
-   * and the grant keeps the {@code [test-template-invocation:#n]} segment -- so a lookup
-   * by the stripped template id misses, every distributed invocation looks non-retryable,
-   * and the downgrade quietly does nothing for the one mode that needs it most. Both
-   * resolutions live here so they cannot drift apart again.
-   */
-  private String owningUnitOf(TestDescriptor descriptor) {
-    String wireId = wireIdOf(descriptor);
-    return leasedUnits.contains(wireId) ? wireId : ExecutionIdentity.leaseId(descriptor).value();
   }
 
   /** Marks a failure the coordinator still owes a retry; never escapes the launcher report. */
@@ -229,13 +232,17 @@ final class UnitOutcomeListener implements EngineExecutionListener {
         .add(new InvocationRecord(recordId.value(), outcome, durationMs, reason));
   }
 
-  private void fillUnitsBeneath(String containerWireId, Outcome outcome, String reason) {
+  /** Explains every leased unit under a container that emitted nothing for its children. */
+  private Set<String> fillUnitsBeneath(String containerWireId, Outcome outcome, String reason) {
     String prefix = containerWireId + "/";
-    for (String unit : leasedUnits) {
+    Set<String> filled = new LinkedHashSet<>();
+    for (String unit : leases.keySet()) {
       if (!finalized.containsKey(unit) && unit.startsWith(prefix)) {
         finalize(unit, outcome, 0, reason, invocationsByUnit.get(unit));
+        filled.add(unit);
       }
     }
+    return filled;
   }
 
   private void finalize(
