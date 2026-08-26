@@ -62,7 +62,7 @@ final class FairShare {
    * How many more of the method's invocations this shard may lease right now. The cap is
    * a fair share -- ceil of the eligible invocations over the expected fleet --
    * and it binds only while another <em>live</em> shard may still ask: registered, not
-   * departed, not released, not exhausted, and not past the pass. The declared
+   * departed, not released, and not exhausted. The declared
    * {@code shard.count} deliberately cannot make the cap bind: a shard that dies before
    * registration would otherwise hold invocations back forever -- the live shards drain
    * their shares, exhaust, stop pulling, and the remainder sits PENDING into an

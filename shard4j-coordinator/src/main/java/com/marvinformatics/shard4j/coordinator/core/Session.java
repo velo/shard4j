@@ -515,17 +515,32 @@ final class Session {
     }
     unit.lease = null;
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
-    // Also the replay-safe half of the idle lifecycle. Leases are deliberately not logged,
-    // so the clear in lease() exists only in memory: fold the log after a restart and a
-    // shard that idled once and then worked for an hour comes back idle-since-its-first-
-    // barrier, outranking every genuine waiter and getting them released while work is
-    // outstanding. Completions *are* logged, so clearing here makes the reconstruction
-    // "idle since the last SHARD_IDLE after this shard's last completion", which matches
-    // live state. On the live path this is a no-op -- lease() already cleared it.
+    // Part of the replay-safe half of the idle lifecycle. Leases are deliberately not
+    // logged, so the clear in lease() exists only in memory: fold the log after a restart
+    // and a shard that idled once and then worked for an hour comes back
+    // idle-since-its-first-barrier, outranking every genuine waiter and getting them
+    // released while work is outstanding. Every logged proof that a shard was working
+    // therefore clears it -- here, and on the NACK and stale-result paths below.
+    //
+    // This narrows the phantom rather than eliminating it: a shard that idles, leases, and
+    // dies before producing any of those three leaves nothing in the log to clear it, and
+    // replays as idle until its next lease. The residual window is "restart to that shard's
+    // next lease" instead of unbounded, and the cost is a fairness skew in the rank rather
+    // than lost work -- ranks among live idle shards remain a permutation, so the sizes of
+    // the RUN/WAIT/DONE bands do not change. Closing it properly needs leases in the log,
+    // which is a deliberate non-goal. On the live path this is a no-op -- lease() cleared it.
     info.idleSince = null;
     info.completed++;
     info.lastSeenAt = now;
     touch(now);
+  }
+
+  /** A NACK is proof the shard was holding work, so it also ends the idle clock. */
+  void clearIdle(int shard) {
+    ShardInfo info = shards.get(shard);
+    if (info != null) {
+      info.idleSince = null;
+    }
   }
 
   void recordNack(NackRequest.NackedLease lease, Instant now) {
@@ -538,6 +553,7 @@ final class Session {
   }
 
   void recordStale(ResultRequest request) {
+    clearIdle(request.shard());
     if (staleResults.size() < DIAGNOSTIC_CAP) {
       staleResults.add(request);
     } else {

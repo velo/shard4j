@@ -358,6 +358,7 @@ public final class CoordinatorCore {
         if (current != null && current.equals(lease.fence())) {
           session.releaseLease(lease.testId());
           session.recordNack(lease, now);
+          session.clearIdle(request.shard());
           sessionLog.appendQuietly(
               LogRecord.nack(
                   tenantKey,
@@ -537,6 +538,12 @@ public final class CoordinatorCore {
     boolean vanished = Boolean.TRUE.equals(record.vanished());
     session.recordNack(
         new NackRequest.NackedLease(record.testId(), null, record.reason(), vanished), record.ts());
+    // Mirrors the live path: a NACK proves the shard was holding work, so replaying one
+    // must end its idle clock too, or the fold keeps a stale idleSince the live run cleared
+    // and markIdle's first-arrival-wins guard then swallows the later, correct arrival.
+    if (record.shard() != null) {
+      session.clearIdle(record.shard());
+    }
     // Only the census correction is replayed; the duration-store drop lives in the
     // snapshot. A re-expansion that resurrects the probe merely re-probes and re-vanishes.
     if (vanished
