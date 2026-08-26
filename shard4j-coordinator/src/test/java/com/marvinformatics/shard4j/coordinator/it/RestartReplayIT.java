@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
@@ -51,16 +50,15 @@ class RestartReplayIT {
       incarnationBefore = passedFence.incarnation();
       client.result(
           sessionId,
-          new ResultRequest(0, Pass.MAIN, passed, passedFence, Outcome.PASSED, 5_000, false, null, null));
+          new ResultRequest(0, passed, passedFence, Outcome.PASSED, 5_000, false, null, null));
       Fence failedFence = client.claimOne(sessionId, 0, failed);
       client.result(
           sessionId,
-          new ResultRequest(0, Pass.MAIN, failed, failedFence, Outcome.FAILED, 3_000, false, null, null));
+          new ResultRequest(0, failed, failedFence, Outcome.FAILED, 3_000, false, null, null));
       Fence skippedFence = client.claimOne(sessionId, 0, skipped);
       client.result(
           sessionId,
-          new ResultRequest(
-              0, Pass.MAIN, skipped, skippedFence, Outcome.SKIPPED, 2, false, "disabled", null));
+          new ResultRequest(0, skipped, skippedFence, Outcome.SKIPPED, 2, false, "disabled", null));
       client.claimOne(sessionId, 0, leased);
 
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
@@ -76,7 +74,17 @@ class RestartReplayIT {
       SessionView view = client.view(sessionId);
       assertThat(view.registeredCount()).isEqualTo(5);
       assertThat(CoordinatorClient.stateOf(view, passed)).isEqualTo(TestState.PASSED);
-      assertThat(CoordinatorClient.stateOf(view, failed)).isEqualTo(TestState.FAILED);
+      // A failure with budget left replays as PENDING, not FAILED: the requeue is part
+      // of the recorded state, so a restart mid-session does not lose the retry that was
+      // already owed. The spent attempt has to survive with it, or the budget resets.
+      assertThat(CoordinatorClient.stateOf(view, failed)).isEqualTo(TestState.PENDING);
+      assertThat(
+              view.tests().stream()
+                  .filter(test -> test.testId().equals(failed))
+                  .findFirst()
+                  .orElseThrow()
+                  .records())
+          .hasSize(1);
       assertThat(CoordinatorClient.stateOf(view, skipped)).isEqualTo(TestState.SKIPPED);
       assertThat(
               view.tests().stream()
@@ -128,7 +136,7 @@ class RestartReplayIT {
       Fence fence = client.claimOne(sessionId, 0, worked);
       client.result(
           sessionId,
-          new ResultRequest(0, Pass.MAIN, worked, fence, Outcome.PASSED, 500, false, null, null));
+          new ResultRequest(0, worked, fence, Outcome.PASSED, 500, false, null, null));
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
     } finally {
       first.stop();

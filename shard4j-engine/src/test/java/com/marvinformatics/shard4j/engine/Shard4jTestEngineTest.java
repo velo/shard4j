@@ -58,7 +58,6 @@ class Shard4jTestEngineTest {
             .configurationParameter(ShardConfiguration.COORDINATOR_URL, "http://localhost:1")
             .configurationParameter(ShardConfiguration.SESSION_ID, "7f3a")
             .configurationParameter(ShardConfiguration.SHARD_INDEX, "0")
-            .configurationParameter(ShardConfiguration.PASS, "main")
             .build();
 
     TestDescriptor descriptor = new Shard4jTestEngine().discover(request, ENGINE_ROOT);
@@ -83,7 +82,6 @@ class Shard4jTestEngineTest {
             .configurationParameter(ShardConfiguration.COORDINATOR_URL, "http://localhost:1")
             .configurationParameter(ShardConfiguration.SESSION_ID, "7f3a")
             .configurationParameter(ShardConfiguration.SHARD_INDEX, "0")
-            .configurationParameter(ShardConfiguration.PASS, "main")
             .build();
     Shard4jTestEngine engine = new Shard4jTestEngine();
     TestDescriptor root = engine.discover(request, ENGINE_ROOT);

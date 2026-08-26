@@ -3,12 +3,11 @@ package com.marvinformatics.shard4j.engine;
 import com.marvinformatics.shard4j.protocol.CensusUnit;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The pass epilogue's classification of leases the engine could not explain with a
+ * The drain epilogue's classification of leases the engine could not explain with a
  * terminal outcome, as a pure function over the drained grants -- so the three-way
  * decision and every NACK's wording are unit-testable without a container.
  *
@@ -28,7 +27,7 @@ import java.util.List;
  */
 record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
 
-  static Reconciliation classify(List<Grant> unexplained, int shardIndex, Pass pass) {
+  static Reconciliation classify(List<Grant> unexplained, int shardIndex) {
     List<NackRequest.NackedLease> nacks = new ArrayList<>();
     List<String> driftedInvocations = new ArrayList<>();
     List<String> unexplainable = new ArrayList<>();
@@ -41,8 +40,6 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
                 grant.fence(),
                 "Cardinality probe past recorded history did not materialise on shard "
                     + shardIndex
-                    + " (pass "
-                    + pass
                     + "); the recorded parameter count still stands",
                 true));
       } else if (invocation) {
@@ -52,8 +49,6 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
                 grant.fence(),
                 "Invocation no longer exists on shard "
                     + shardIndex
-                    + " (pass "
-                    + pass
                     + "): the parameter set changed since this invocation was last"
                     + " measured; dropped from the plan and returned to the pool",
                 true));
@@ -65,8 +60,6 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
                 grant.fence(),
                 "Leased but never produced a terminal outcome on shard "
                     + shardIndex
-                    + " (pass "
-                    + pass
                     + "); returned to the pool",
                 false));
         unexplainable.add(grant.testId());
@@ -75,9 +68,9 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
     return new Reconciliation(nacks, failureOf(shardIndex, driftedInvocations, unexplainable));
   }
 
-  /** The wording for leases abandoned wholesale -- a mid-pass failure or a SIGTERM. */
+  /** The wording for leases abandoned wholesale -- a mid-drain failure or a SIGTERM. */
   static List<NackRequest.NackedLease> abandoned(
-      List<Grant> outstanding, int shardIndex, Pass pass, String cause) {
+      List<Grant> outstanding, int shardIndex, String cause) {
     return outstanding.stream()
         .map(
             grant ->
@@ -86,8 +79,6 @@ record Reconciliation(List<NackRequest.NackedLease> nacks, String failure) {
                     grant.fence(),
                     "Abandoned on shard "
                         + shardIndex
-                        + " (pass "
-                        + pass
                         + "): "
                         + cause
                         + "; returned to the pool",

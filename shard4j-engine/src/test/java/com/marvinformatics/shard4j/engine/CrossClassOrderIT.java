@@ -6,7 +6,6 @@ import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.nio.file.Path;
@@ -101,13 +100,12 @@ class CrossClassOrderIT {
     CoordinatorClient otherShard = CoordinatorContainer.shardApiOf(coordinator);
     otherShard.register(sessionId, new RegisterRequest(1, 1, Map.of(), census.unitIds(), null));
     List<Grant> taken =
-        otherShard.claim(sessionId, new ClaimRequest(1, Pass.MAIN, counted, countedUnits)).granted();
+        otherShard.claim(sessionId, new ClaimRequest(1, counted, countedUnits)).granted();
     assertThat(taken).hasSize(3);
     for (Grant grant : taken) {
       otherShard.result(
           sessionId,
-          new ResultRequest(
-              1, Pass.MAIN, grant.testId(), grant.fence(), Outcome.PASSED, 50, false, null, null));
+          new ResultRequest(1, grant.testId(), grant.fence(), Outcome.PASSED, 50, false, null, null));
     }
 
     ShardConfiguration configuration = configuration(sessionId);

@@ -7,7 +7,6 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -54,15 +53,14 @@ class ForgottenSessionIT {
             client
                 .claimRaw(
                     sessionId,
-                    new ClaimRequest(0, Pass.MAIN, "com.example.orders.GhostIT", List.of(testId)))
+                    new ClaimRequest(0, "com.example.orders.GhostIT", List.of(testId)))
                 .status())
         .isEqualTo(404);
     assertThat(
             client
                 .resultRaw(
                     sessionId,
-                    new ResultRequest(
-                        0, Pass.MAIN, testId, fence, Outcome.PASSED, 100, false, null, null))
+                    new ResultRequest(0, testId, fence, Outcome.PASSED, 100, false, null, null))
                 .status())
         .isEqualTo(404);
     assertThat(

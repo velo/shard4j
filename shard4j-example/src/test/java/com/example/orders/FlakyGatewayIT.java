@@ -8,15 +8,24 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Sharding fixture: fails its first execution and passes afterwards, so a run only goes
- * green if the failure is re-handed through the barrier into a retry pass. The static
- * counter is only correct in the in-process harness; under real per-pass forks each JVM
- * starts it fresh and the fixture fails terminally, so do not promote it into the
- * coordinated profile as-is.
+ * green if the failure is requeued and taken again. The static counter is only correct in
+ * the in-process harness; under real forks each JVM starts it fresh and the fixture fails
+ * terminally, so do not promote it into the coordinated profile as-is.
+ *
+ * <p>Because the counter is JVM-wide it is also shared by every harness test that drives
+ * this fixture, and a second one silently spends the first one's failure -- leaving the
+ * next test to observe a unit that passed first time and no retry at all. Any test using
+ * this fixture must call {@link #resetAttempts()} in its own setup.
  */
 @Tag("shard4j-fixture")
 class FlakyGatewayIT {
 
   private static final AtomicInteger ATTEMPTS = new AtomicInteger();
+
+  /** Re-arms the fixture so the next execution fails once more. */
+  static void resetAttempts() {
+    ATTEMPTS.set(0);
+  }
 
   @Test
   void retriesAgainstTheGateway() {

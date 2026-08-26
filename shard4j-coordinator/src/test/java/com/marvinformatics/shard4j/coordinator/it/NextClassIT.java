@@ -8,7 +8,6 @@ import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.io.IOException;
@@ -71,7 +70,7 @@ class NextClassIT {
 
     // The class holding no-history units beats the class with the biggest measured
     // duration, and inside it the unknowns lead in pinned hash order before its known unit.
-    NextClassResponse first = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse first = client.next(sessionId, new NextClassRequest(0));
     assertThat(first.className()).isEqualTo(MIXED);
     List<String> expectedUnknowns = new ArrayList<>(List.of(MIXED_NEW_A, MIXED_NEW_B));
     expectedUnknowns.sort(
@@ -81,18 +80,18 @@ class NextClassIT {
     assertThat(first.granted()).extracting(Grant::testId).isEqualTo(expectedMixed);
     reportAllPassed(sessionId, first.granted());
 
-    NextClassResponse second = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse second = client.next(sessionId, new NextClassRequest(0));
     assertThat(second.className()).isEqualTo(BIG);
     assertThat(second.granted()).extracting(Grant::testId).containsExactly(BIG_CASE);
     reportAllPassed(sessionId, second.granted());
 
-    NextClassResponse third = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse third = client.next(sessionId, new NextClassRequest(0));
     assertThat(third.className()).isEqualTo(MID);
     assertThat(third.granted()).extracting(Grant::testId).containsExactly(MID_CASE);
     reportAllPassed(sessionId, third.granted());
 
     // Nothing claimable names no class and grants nothing.
-    NextClassResponse done = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse done = client.next(sessionId, new NextClassRequest(0));
     assertThat(done.className()).isNull();
     assertThat(done.granted()).isEmpty();
   }
@@ -103,14 +102,14 @@ class NextClassIT {
     client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census(), null));
     client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census(), null));
 
-    NextClassResponse everythingMixed = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
-    NextClassResponse everythingBig = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
-    NextClassResponse everythingMid = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse everythingMixed = client.next(sessionId, new NextClassRequest(0));
+    NextClassResponse everythingBig = client.next(sessionId, new NextClassRequest(0));
+    NextClassResponse everythingMid = client.next(sessionId, new NextClassRequest(0));
     assertThat(everythingMixed.granted()).hasSize(3);
     assertThat(everythingBig.granted()).hasSize(1);
     assertThat(everythingMid.granted()).hasSize(1);
 
-    NextClassResponse starved = client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+    NextClassResponse starved = client.next(sessionId, new NextClassRequest(1));
     assertThat(starved.className()).isNull();
     assertThat(starved.granted()).isEmpty();
   }
@@ -119,8 +118,7 @@ class NextClassIT {
     for (Grant grant : grants) {
       client.result(
           sessionId,
-          new ResultRequest(
-              0, Pass.MAIN, grant.testId(), grant.fence(), Outcome.PASSED, 1_000, false, null, null));
+          new ResultRequest(0, grant.testId(), grant.fence(), Outcome.PASSED, 1_000, false, null, null));
     }
   }
 }

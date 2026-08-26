@@ -47,6 +47,7 @@ public record CoordinatorSettings(
     @DefaultValue("false") boolean publicRead,
     @DefaultValue("20m") Duration leaseTtl,
     @DefaultValue("8") int maxClaimBatch,
+    @DefaultValue("3") int maxAttempts,
     @DefaultValue("60m") Duration durationClamp,
     @DefaultValue("7d") Duration gcIdle,
     @DefaultValue("30d") Duration historyRetention) {

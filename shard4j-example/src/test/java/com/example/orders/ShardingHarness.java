@@ -106,15 +106,14 @@ final class ShardingHarness {
       TestExecutionResult engineResult) {}
 
   static ShardRun runShard(
-      String coordinatorUrl, String sessionId, int shard, String pass, List<Class<?>> classes) {
+      String coordinatorUrl, String sessionId, int shard, List<Class<?>> classes) {
     LauncherDiscoveryRequestBuilder builder =
         LauncherDiscoveryRequestBuilder.request()
             .filters(EngineFilter.excludeEngines("junit-jupiter"))
             .configurationParameter("shard.enabled", "true")
             .configurationParameter("shard.coordinator.url", coordinatorUrl)
             .configurationParameter("shard.session.id", sessionId)
-            .configurationParameter("shard.index", Integer.toString(shard))
-            .configurationParameter("shard.pass", pass);
+            .configurationParameter("shard.index", Integer.toString(shard));
     classes.forEach(type -> builder.selectors(DiscoverySelectors.selectClass(type)));
     LauncherDiscoveryRequest request = builder.build();
 

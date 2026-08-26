@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import org.junit.platform.engine.TestExecutionResult;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.TestDescriptor;
@@ -49,6 +50,7 @@ class UnitOutcomeListenerTest {
             jupiter.nestedRootId(),
             false,
             leased,
+            unitId -> false,
             result -> results.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
     return results;
@@ -161,6 +163,126 @@ class UnitOutcomeListenerTest {
     assertThat(result.invocations().get(1).reason()).contains("beta is off");
   }
 
+  /**
+   * Runs one failing unit and returns what each side was told: the status the launcher saw,
+   * and the outcome the coordinator was given. They are allowed to disagree in exactly one
+   * direction, and this is the fixture that proves which.
+   */
+  private static Map.Entry<TestExecutionResult.Status, Outcome> failingUnitReportedTo(
+      boolean retryable) {
+    String failing = method(PLAIN, "fails()");
+    JupiterDelegate jupiter = new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID));
+    Set<ExecutionId> leased = Set.of(new ExecutionId(failing));
+    TestDescriptor batch =
+        jupiter.discoverIds(
+            leased.stream().toList(),
+            new MapConfigurationParameters(Map.of()),
+            EngineTestHarness.outputDirectoryCreator());
+
+    // Keyed by the leaf's own segment, not the wire id: what reaches the launcher is the
+    // nested descriptor, whose uniqueId carries this engine's root as a prefix.
+    Map<String, TestExecutionResult.Status> launcherSaw = new HashMap<>();
+    EngineExecutionListener downstream =
+        new EngineExecutionListener() {
+          @Override
+          public void executionFinished(TestDescriptor descriptor, TestExecutionResult result) {
+            String id = descriptor.getUniqueId().toString();
+            if (id.endsWith("[method:fails()]")) {
+              launcherSaw.put("fails", result.getStatus());
+            }
+          }
+        };
+
+    Map<String, UnitResult> reported = new HashMap<>();
+    UnitOutcomeListener listener =
+        new UnitOutcomeListener(
+            downstream,
+            jupiter.nestedRootId(),
+            false,
+            leased,
+            unitId -> retryable,
+            result -> reported.put(result.unitId().value(), result));
+    jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
+
+    assertThat(launcherSaw).as("the launcher must have been told something").containsKey("fails");
+    assertThat(reported).as("the coordinator must have been told something").containsKey(failing);
+    return Map.entry(launcherSaw.get("fails"), reported.get(failing).outcome());
+  }
+
+  @Test
+  void givenAFailureWithBudgetLeft_whenReported_thenTheLauncherSeesAbortedAndTheCoordinatorFailed() {
+    Map.Entry<TestExecutionResult.Status, Outcome> told = failingUnitReportedTo(true);
+
+    assertThat(told.getKey())
+        .as("failsafe must stay green while a retry is still owed")
+        .isEqualTo(TestExecutionResult.Status.ABORTED);
+    assertThat(told.getValue())
+        .as(
+            "the coordinator must be told the truth: the coverage verdict counts ABORTED as"
+                + " terminal-OK, so downgrading this direction turns a real failure green")
+        .isEqualTo(Outcome.FAILED);
+  }
+
+  @Test
+  void givenARetryableInvocationLeasedInItsOwnRight_whenItFails_thenTheLauncherStillSeesAborted() {
+    // The regression this pins: resolving the owning unit by stripping to the template is
+    // wrong when the coordinator distributes a method and leases each invocation on its
+    // own -- the grant keeps the invocation segment, a lookup by template id misses, and
+    // the downgrade silently does nothing for the mode that needs it most. The predicate
+    // here is a real id set rather than a constant, which is the only way that can fail.
+    String brokenRow = rowsInvocation(2);
+    JupiterDelegate jupiter = new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID));
+    Set<ExecutionId> leased = Set.of(new ExecutionId(brokenRow));
+    TestDescriptor batch =
+        jupiter.discoverIds(
+            leased.stream().toList(),
+            new MapConfigurationParameters(Map.of()),
+            EngineTestHarness.outputDirectoryCreator());
+
+    Map<String, TestExecutionResult.Status> launcherSaw = new HashMap<>();
+    EngineExecutionListener downstream =
+        new EngineExecutionListener() {
+          @Override
+          public void executionFinished(TestDescriptor descriptor, TestExecutionResult result) {
+            if (descriptor.getUniqueId().toString().endsWith("[test-template-invocation:#2]")) {
+              launcherSaw.put("row", result.getStatus());
+            }
+          }
+        };
+
+    Map<String, UnitResult> reported = new HashMap<>();
+    Set<String> retryableIds = Set.of(brokenRow);
+    UnitOutcomeListener listener =
+        new UnitOutcomeListener(
+            downstream,
+            jupiter.nestedRootId(),
+            false,
+            leased,
+            retryableIds::contains,
+            result -> reported.put(result.unitId().value(), result));
+    jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
+
+    assertThat(launcherSaw)
+        .as("the failing row must have reached the launcher at all")
+        .containsKey("row");
+    assertThat(launcherSaw.get("row"))
+        .as("a leased invocation resolves to itself, not to its template")
+        .isEqualTo(TestExecutionResult.Status.ABORTED);
+    assertThat(reported.get(brokenRow).outcome())
+        .as("the coordinator still hears the truth")
+        .isEqualTo(Outcome.FAILED);
+  }
+
+  @Test
+  void givenAFailureWithNoBudgetLeft_whenReported_thenBothSidesSeeFailed() {
+    Map.Entry<TestExecutionResult.Status, Outcome> told = failingUnitReportedTo(false);
+
+    assertThat(told.getKey())
+        .as("the last attempt has nothing left to recover it, so the shard must redden")
+        .isEqualTo(TestExecutionResult.Status.FAILED);
+    assertThat(told.getValue()).isEqualTo(Outcome.FAILED);
+  }
+
   @Test
   void givenAStaleUnitInTheBatch_whenExecuting_thenItProducesNoOutcomeAndIsReportedUnexplained() {
     String ghost = method(PLAIN, "ghost()");
@@ -180,6 +302,7 @@ class UnitOutcomeListenerTest {
             jupiter.nestedRootId(),
             false,
             leased,
+            unitId -> false,
             result -> results.put(result.unitId().value(), result));
     jupiter.execute(batch, EngineTestHarness.outerRequest(EngineExecutionListener.NOOP), listener);
 

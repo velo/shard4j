@@ -17,7 +17,6 @@ import java.util.List;
  */
 public record ResultRequest(
     int shard,
-    Pass pass,
     String testId,
     Fence fence,
     Outcome outcome,

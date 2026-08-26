@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.Grant;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -89,7 +88,7 @@ class ConcurrentClaimsIT {
                     ClaimResponse response =
                         client.claim(
                             sessionId,
-                            new ClaimRequest(shardIndex, Pass.MAIN, className, candidates));
+                            new ClaimRequest(shardIndex, className, candidates));
                     if (!response.granted().isEmpty()) {
                       anyGrantedInSweep = true;
                       response.granted().stream().map(Grant::testId).forEach(allGrantedIds::add);

@@ -24,11 +24,11 @@ import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
 
 /**
- * One pass of the coordinated loop, inside one {@code execute()} call: register the
+ * The coordinated loop, inside one {@code execute()} call: register the
  * census, ask the coordinator what to run next and drain each class it names, run each
  * grant through a nested Jupiter execution, report every unit as it completes, reconcile,
- * and hold at the barrier. The next pass is the next failsafe execution block in the same
- * Maven run.
+ * and hold at the barrier -- returning to claim whenever the barrier says RUN, so a unit
+ * another shard requeued is picked up here rather than needing a second failsafe block.
  *
  * <p>{@code shard.concurrency} slots run this pull loop side by side, each draining its
  * own class through its own nested execution -- so {@code @BeforeAll} stays a once-per-
@@ -88,20 +88,45 @@ final class ShardLoop {
     LivenessKeepalive keepalive = LivenessKeepalive.start(gateway::keepalive);
     Thread abandonOnKill =
         new Thread(
-            () -> abandonOutstanding("the shard JVM was terminated mid-pass"),
+            () -> abandonOutstanding("the shard JVM was terminated mid-drain"),
             "shard4j-abandon-leases");
     Runtime.getRuntime().addShutdownHook(abandonOnKill);
     try {
-      claimAndRunUntilDrained(census);
-      reconcileOrFail();
-      failOnMassAbort();
-      holdAtBarrier(keepalive);
+      // Drain, then ask; RUN means work arrived while this shard was idle -- almost always
+      // a unit another shard just failed and requeued -- so take it rather than returning.
+      // Returning was survivable only while consumers declared a second failsafe execution
+      // to come back in: with a single execution, a shard told to RUN would exit without
+      // claiming what it was ranked to run, the whole hunger-rank and spare-holding
+      // machinery would go inert, and the only surviving retry path would be the failing
+      // shard's own pull loop -- which is exactly the path that is gone when it dies.
+      BarrierResponse verdict;
+      do {
+        // Per drain, not per execution: the mass-abort guard asks whether *this* drain was
+        // wholly aborted across more than one class. Left accumulating across iterations,
+        // two separate drains each with one legitimate single-class abort would jointly
+        // trip a heuristic meant to catch a broken environment.
+        outcomes.clear();
+        claimAndRunUntilDrained(census);
+        reconcileOrFail();
+        failOnMassAbort();
+        verdict = holdAtBarrier(keepalive);
+        // RUN with nothing drained is not a contradiction: the barrier counts every PENDING
+        // unit, including ones this shard may not be granted because its fair share of a
+        // distributed method is already spent. Re-asking immediately turns that into a tight
+        // loop against the coordinator's single write lock, for as long as the shard holding
+        // the balance takes to finish -- minutes, and invisible to any test because it always
+        // resolves eventually. Waiting out the coordinator's own cadence costs nothing: if
+        // there were work here for this shard, it would have been drained.
+        if (verdict.action() == BarrierResponse.Action.RUN && outcomes.isEmpty()) {
+          sleepSeconds(verdict.retryAfterSeconds() == null ? 5 : verdict.retryAfterSeconds());
+        }
+      } while (verdict.action() == BarrierResponse.Action.RUN);
     } catch (RuntimeException | Error e) {
       // An abnormal exit must never abandon leases to the TTL: healthy shards would sit
       // at the barrier waiting out earliest_lease_expiry, converting one shard's failure
       // into everyone's slowest path. NACK what is still outstanding, then fail honestly.
       try {
-        abandonOutstanding("the shard failed mid-pass: " + e);
+        abandonOutstanding("the shard failed mid-drain: " + e);
       } catch (RuntimeException nackFailure) {
         e.addSuppressed(nackFailure);
       }
@@ -114,14 +139,14 @@ final class ShardLoop {
 
   /**
    * Returns every still-outstanding lease to the pool, naming the cause. Reached from
-   * three places -- the mid-pass failure path, the SIGTERM shutdown hook, and never twice:
+   * three places -- the mid-drain failure path, the SIGTERM shutdown hook, and never twice:
    * the ledger's snapshot-and-clear makes a second call a no-op, so the hook cannot
    * re-NACK what the failure path already returned.
    */
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
         Reconciliation.abandoned(
-            ledger.drainAll(), configuration.shardIndex(), configuration.pass(), cause);
+            ledger.drainAll(), configuration.shardIndex(), cause);
     if (nacks.isEmpty()) {
       return;
     }
@@ -238,6 +263,10 @@ final class ShardLoop {
               jupiter.nestedRootId(),
               false,
               Set.copyOf(leased),
+              unitId -> {
+                Grant grant = byUnit.get(unitId);
+                return grant != null && grant.retryable();
+              },
               result -> reportCompleted(byUnit, result));
       jupiter.execute(batch, request, listener);
     }
@@ -294,7 +323,7 @@ final class ShardLoop {
   }
 
   /**
-   * The pass epilogue. A stale unique-id selector is dropped by the nested discovery in
+   * The drain epilogue. A stale unique-id selector is dropped by the nested discovery in
    * complete silence -- no event, no error, clean exit -- so this drain is the only place
    * a claimed-but-never-run unit can be noticed at all. What each unexplained lease
    * means, the wording of its NACK and the failure message are {@link Reconciliation}'s;
@@ -306,7 +335,7 @@ final class ShardLoop {
       return;
     }
     Reconciliation reconciliation =
-        Reconciliation.classify(unexplained, configuration.shardIndex(), configuration.pass());
+        Reconciliation.classify(unexplained, configuration.shardIndex());
     gateway.nack(reconciliation.nacks());
     if (reconciliation.failure() == null) {
       log.log(
@@ -321,7 +350,7 @@ final class ShardLoop {
   }
 
   /**
-   * The mass-abort guard: a genuine assumption is a property of one test, so a pass whose
+   * The mass-abort guard: a genuine assumption is a property of one test, so a drain whose
    * entire leased set aborted across more than one class is an environment failure -- a
    * per-JVM latch converting the whole shard's work into aborts would otherwise read as a
    * tidy green that executed nothing.
@@ -338,9 +367,7 @@ final class ShardLoop {
     outcomes.keySet().forEach(unit -> classes.add(classNameOf(unit)));
     if (classes.size() > 1) {
       throw new ShardExecutionException(
-          "Every unit this shard leased in pass "
-              + configuration.pass()
-              + " ended ABORTED, spanning "
+          "Every unit this shard leased ended ABORTED, spanning "
               + classes.size()
               + " classes -- that is an environment failure, not a set of assumptions: "
               + String.join(", ", classes));
@@ -348,17 +375,18 @@ final class ShardLoop {
   }
 
   /**
-   * Arrival is the pass-completion report; WAIT is polled at the coordinator's cadence,
-   * which doubles as proof of life. DONE means stop pulling -- the verdict, not this
-   * shard's exit code, decides the run -- and RUN hands control back so the next failsafe
-   * execution block can claim from the retry pool.
+   * Blocks until the coordinator says this shard may run again or is finished with it.
+   * Arrival reports that this shard found nothing to claim; WAIT is polled at the
+   * coordinator's cadence, which doubles as proof of life. DONE means stop pulling -- the
+   * verdict, not this shard's exit code, decides the run. RUN means work arrived while this
+   * shard was idle, and the caller loops back to claim it.
    */
-  private void holdAtBarrier(LivenessKeepalive keepalive) {
+  private BarrierResponse holdAtBarrier(LivenessKeepalive keepalive) {
     while (true) {
-      BarrierResponse response = gateway.barrier(configuration.pass());
+      BarrierResponse response = gateway.barrier();
       switch (response.action()) {
         case RUN, DONE -> {
-          return;
+          return response;
         }
         case WAIT -> {
           int retryAfter = response.retryAfterSeconds() == null ? 5 : response.retryAfterSeconds();
@@ -373,7 +401,9 @@ final class ShardLoop {
             // reviving an explicit departure for up to a sweep interval.
             keepalive.stop();
             gateway.depart();
-            return;
+            // Departing is this shard's own DONE: the coordinator never sent one, but the
+            // caller must stop pulling all the same.
+            return new BarrierResponse(BarrierResponse.Action.DONE, null, null);
           }
           sleepSeconds(retryAfter);
         }

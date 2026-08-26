@@ -84,6 +84,7 @@ public class CoordinatorWiring {
             .incarnation(dataDirectory.incarnation())
             .leaseTtl(settings.leaseTtl())
             .maxClaimBatch(settings.maxClaimBatch())
+            .maxAttempts(settings.maxAttempts())
             .gcIdle(settings.gcIdle())
             .build();
     core.replay(sessionLog.replay(settings.gcIdle(), now));

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -203,7 +202,7 @@ class DurationStoreTest {
         1,
         testId,
         0,
-        Pass.MAIN,
+        1,
         outcome,
         durationMs,
         false,
@@ -218,7 +217,7 @@ class DurationStoreTest {
         1,
         testId,
         0,
-        Pass.MAIN,
+        1,
         outcome,
         durationMs,
         null,

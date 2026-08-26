@@ -13,11 +13,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Runs one pull loop per drain slot and owns the slots' whole lifecycle: the named worker
  * threads, the stop-pulling flag one slot's failure raises for its siblings, the wait
  * that outlives an interrupt, and surfacing the first failure with the rest suppressed.
- * The pass epilogue -- reconciliation, the barrier -- always sees every slot finished.
+ * The drain epilogue -- reconciliation, the barrier -- always sees every slot finished.
  */
 final class SlotScheduler {
 
   /** One slot's failure stops the others from pulling new classes; they finish what they hold. */
+  // One-shot and never reset, which ShardLoop.run() now depends on: it re-enters the
+  // drain whenever the barrier says RUN, and a flag left set from an earlier pass would
+  // silently no-op every drain after it. Safe only because every path that sets it also
+  // escorts a throw out of runToCompletion, so a normal return can never carry it. If a
+  // future path sets it without throwing, build a fresh SlotScheduler per drain instead.
   private final AtomicBoolean stopPulling = new AtomicBoolean();
 
   boolean pullingStopped() {

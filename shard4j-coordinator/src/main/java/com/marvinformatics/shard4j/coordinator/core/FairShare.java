@@ -1,17 +1,18 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The fair-share hold-back policy for a distributed method's invocations: a pure
- * computation over one method's expanded units, the roster view, the pass and the clock
+ * computation over one method's expanded units, the roster view and the clock
  * -- plus the two facts only this policy cares about, the consumer-declared fleet size
  * and which shards have exhausted their open ask. The session owns the state machine and
  * the roster; this type answers exactly one question: how many more of the method's
@@ -27,7 +28,7 @@ final class FairShare {
 
   private final Map<Integer, Session.ShardInfo> roster;
   private final Instant createdAt;
-  private final Map<Integer, Pass> exhausted = new HashMap<>();
+  private final Set<Integer> exhausted = new HashSet<>();
   private int declaredShardCount;
 
   FairShare(Map<Integer, Session.ShardInfo> roster, Instant createdAt) {
@@ -42,9 +43,14 @@ final class FairShare {
     }
   }
 
-  /** The open ask came back empty for this shard: it will not ask again in this pass. */
-  void markExhausted(int shard, Pass pass) {
-    exhausted.put(shard, pass);
+  /** The open ask came back empty for this shard: it has stopped pulling. */
+  void markExhausted(int shard) {
+    exhausted.add(shard);
+  }
+
+  /** Taking work ends the exhaustion, exactly as it ends the idle clock. */
+  void resumed(int shard) {
+    exhausted.remove(shard);
   }
 
   /** A new attempt's shards all ask afresh; no exhaustion survives the epoch bump. */
@@ -54,9 +60,9 @@ final class FairShare {
 
   /**
    * How many more of the method's invocations this shard may lease right now. The cap is
-   * a fair share -- ceil of the pass's eligible invocations over the expected fleet --
+   * a fair share -- ceil of the eligible invocations over the expected fleet --
    * and it binds only while another <em>live</em> shard may still ask: registered, not
-   * departed, not released, not exhausted, and not past the pass. The declared
+   * departed, not released, and not exhausted. The declared
    * {@code shard.count} deliberately cannot make the cap bind: a shard that dies before
    * registration would otherwise hold invocations back forever -- the live shards drain
    * their shares, exhaust, stop pulling, and the remainder sits PENDING into an
@@ -64,8 +70,8 @@ final class FairShare {
    * hold-back safe: spreading degrades to whole-method behaviour rather than stranding a
    * unit.
    */
-  int invocationAllowance(List<Session.UnitState> units, int shard, Pass pass, Instant now) {
-    if (!othersMayStillClaim(shard, pass)) {
+  int invocationAllowance(List<Session.UnitState> units, int shard, Instant now) {
+    if (!othersMayStillClaim(shard)) {
       return Integer.MAX_VALUE;
     }
     int eligible = 0;
@@ -78,43 +84,45 @@ final class FairShare {
         }
         continue;
       }
-      if (Session.claimableIn(unit, pass)) {
+      if (Session.isClaimable(unit)) {
         eligible++;
         continue;
       }
+      // Absorbed units still count toward the denominator: the share this shard has
+      // already taken of a method's invocations is what makes the next ask fair. With
+      // passes gone, "already run" is session-wide rather than per-pass, which is the
+      // same quantity the pass-era code was reaching for one pass at a time.
       SessionView.RecordView latest =
           unit.records.isEmpty() ? null : unit.records.get(unit.records.size() - 1);
-      if (latest != null && latest.pass() == pass) {
+      if (latest != null) {
         eligible++;
         if (latest.shard() == shard) {
           mine++;
         }
       }
     }
-    int share = Math.ceilDiv(eligible, expectedFleet(pass, now));
+    int share = Math.ceilDiv(eligible, expectedFleet(now));
     return Math.max(0, share - mine);
   }
 
-  private int expectedFleet(Pass pass, Instant now) {
+  private int expectedFleet(Instant now) {
     int active =
         (int) roster.values().stream().filter(info -> !info.departed && !info.released).count();
     int fleet = Math.max(1, active);
-    if (pass == Pass.MAIN && withinArrivalWindow(now)) {
+    if (withinArrivalWindow(now)) {
       fleet = Math.max(fleet, declaredShardCount);
     }
     return fleet;
   }
 
-  private boolean othersMayStillClaim(int shard, Pass pass) {
+  private boolean othersMayStillClaim(int shard) {
     return roster.entrySet().stream()
         .anyMatch(
             entry ->
                 entry.getKey() != shard
                     && !entry.getValue().departed
                     && !entry.getValue().released
-                    && exhausted.get(entry.getKey()) != pass
-                    && (entry.getValue().completedPass == null
-                        || entry.getValue().completedPass.ordinal() < pass.ordinal()));
+                    && !exhausted.contains(entry.getKey()));
   }
 
   private boolean withinArrivalWindow(Instant now) {

@@ -117,7 +117,7 @@ final class InvocationDistribution {
     }
     String censusId = unit.censusId();
     // A probe that materialised is proof the set grew past the plan, whatever its outcome
-    // and whichever pass ran it -- a truly nonexistent position produces no result at all,
+    // and whichever shard ran it -- a truly nonexistent position produces no result at all,
     // only a vanished NACK. Chained before any outcome gate on purpose: an ABORTED probe
     // absorbs green, and gating the walk on PASSED would halt discovery there, leaving
     // every row past it silently unrun in every session.

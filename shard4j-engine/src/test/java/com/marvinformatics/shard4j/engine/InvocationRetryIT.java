@@ -1,10 +1,10 @@
 package com.marvinformatics.shard4j.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.nio.file.Path;
@@ -51,7 +51,7 @@ class InvocationRetryIT {
   }
 
   @Test
-  void givenAFailedInvocationOfASplitMethod_whenTheRetryPassRuns_thenOnlyThatPositionRetriesAndCoverageCompletes()
+  void givenAFailedInvocationOfASplitMethod_whenItIsRequeued_thenOnlyThatPositionRetries()
       throws InterruptedException {
     String sessionId = UUID.randomUUID().toString();
     DiscoveredCensus census =
@@ -59,47 +59,35 @@ class InvocationRetryIT {
             List.of(
                 new DiscoveredCensus.ClassUnits(FIXTURE, List.of(new ExecutionId(TEMPLATE)))));
 
-    Thread shard0 = shardThread(sessionId, 0, Pass.MAIN, census);
-    Thread shard1 = shardThread(sessionId, 1, Pass.MAIN, census);
+    // One run, not two. The failed position is requeued the moment it is reported, so a
+    // shard still draining picks it up here -- there is no second pass to enter, and by
+    // the time both shards have finished nothing is left in FAILED for a later pass to
+    // find. A test that looked for one would find none, which is how this one used to end.
+    Thread shard0 = shardThread(sessionId, 0, census);
+    Thread shard1 = shardThread(sessionId, 1, census);
     shard0.start();
     shard1.start();
     shard0.join();
     shard1.join();
 
-    SessionView afterMain = CoordinatorContainer.viewOf(coordinator, sessionId);
-    SessionView.TestView flaky =
-        afterMain.tests().stream()
-            .filter(test -> test.state() == TestState.FAILED)
-            .reduce((a, b) -> {
-              throw new AssertionError("exactly one invocation fails in MAIN");
-            })
-            .orElseThrow();
-
-    // Both shards enter the retry pass, as both failsafe execution blocks would; the
-    // coordinator hands the one failed position to an unreleased shard and the other
-    // block runs nothing.
-    Thread retry0 = shardThread(sessionId, 0, Pass.RETRY1, census);
-    Thread retry1 = shardThread(sessionId, 1, Pass.RETRY1, census);
-    retry0.start();
-    retry1.start();
-    retry0.join();
-    retry1.join();
-
     SessionView view = CoordinatorContainer.viewOf(coordinator, sessionId);
     SessionView.TestView retried =
         view.tests().stream()
-            .filter(test -> test.testId().equals(flaky.testId()))
-            .findFirst()
-            .orElseThrow();
+            .filter(test -> test.records().size() > 1)
+            .reduce(
+                (a, b) -> {
+                  throw new AssertionError("exactly one invocation should have been retried");
+                })
+            .orElseThrow(() -> new AssertionError("no invocation was retried at all"));
+
     assertThat(retried.state()).isEqualTo(TestState.PASSED);
-    assertThat(retried.records()).hasSize(2);
-    assertThat(retried.records().get(0).pass()).isEqualTo(Pass.MAIN);
-    assertThat(retried.records().get(0).outcome()).isEqualTo(Outcome.FAILED);
-    assertThat(retried.records().get(1).pass()).isEqualTo(Pass.RETRY1);
-    assertThat(retried.records().get(1).outcome()).isEqualTo(Outcome.PASSED);
+    assertThat(retried.records())
+        .extracting(SessionView.RecordView::attempt, SessionView.RecordView::outcome)
+        .containsExactly(tuple(1, Outcome.FAILED), tuple(2, Outcome.PASSED));
+
     // Its siblings were not re-run, and every position is terminal: full coverage.
     view.tests().stream()
-        .filter(test -> !test.testId().equals(flaky.testId()))
+        .filter(test -> !test.testId().equals(retried.testId()))
         .forEach(
             test -> {
               assertThat(test.state()).isEqualTo(TestState.PASSED);
@@ -110,12 +98,11 @@ class InvocationRetryIT {
   }
 
   private static Thread shardThread(
-      String sessionId, int shardIndex, Pass pass, DiscoveredCensus census) {
+      String sessionId, int shardIndex, DiscoveredCensus census) {
     ShardConfiguration configuration =
         ShardConfigurationBuilder.coordinatedShard(
                 CoordinatorContainer.urlOf(coordinator), sessionId)
             .shardIndex(shardIndex)
-            .pass(pass)
             .shardCount(2)
             .build();
     ShardLoop loop =
@@ -124,6 +111,6 @@ class InvocationRetryIT {
             new JupiterDelegate(UniqueId.forEngine(Shard4jTestEngine.ENGINE_ID)),
             new CoordinatorGateway(configuration, census.unitIds()),
             EngineTestHarness.outerRequest(EngineExecutionListener.NOOP));
-    return new Thread(() -> loop.run(census), "retry-shard-" + pass + "-" + shardIndex);
+    return new Thread(() -> loop.run(census), "retry-shard-" + shardIndex);
   }
 }

@@ -5,4 +5,4 @@ package com.marvinformatics.shard4j.protocol;
  * Candidates would be redundant here -- registration already gave the coordinator the
  * whole census, and the choice being the coordinator's is the entire point.
  */
-public record NextClassRequest(int shard, Pass pass) {}
+public record NextClassRequest(int shard) {}

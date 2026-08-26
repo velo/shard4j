@@ -3,7 +3,6 @@ package com.marvinformatics.shard4j.coordinator.core;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.CensusUnit;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -50,7 +49,7 @@ class FairShareTest {
     liveShard(0);
     FairShare share = fairShare();
     share.declareFleet(4);
-    int allowance = share.invocationAllowance(pendingUnits(5), 0, Pass.MAIN, CREATED);
+    int allowance = share.invocationAllowance(pendingUnits(5), 0, CREATED);
     assertThat(allowance).isEqualTo(Integer.MAX_VALUE);
   }
 
@@ -62,7 +61,7 @@ class FairShareTest {
     share.declareFleet(4);
     // Ceil of eight eligible over the declared fleet of four: room is left for the two
     // shards still booting, because a live asker can still come back for the remainder.
-    assertThat(share.invocationAllowance(pendingUnits(8), 0, Pass.MAIN, CREATED)).isEqualTo(2);
+    assertThat(share.invocationAllowance(pendingUnits(8), 0, CREATED)).isEqualTo(2);
   }
 
   @Test
@@ -71,8 +70,8 @@ class FairShareTest {
     liveShard(1);
     FairShare share = fairShare();
     share.declareFleet(4);
-    share.markExhausted(1, Pass.MAIN);
-    assertThat(share.invocationAllowance(pendingUnits(8), 0, Pass.MAIN, CREATED))
+    share.markExhausted(1);
+    assertThat(share.invocationAllowance(pendingUnits(8), 0, CREATED))
         .isEqualTo(Integer.MAX_VALUE);
   }
 
@@ -83,6 +82,6 @@ class FairShareTest {
     FairShare share = fairShare();
     share.declareFleet(4);
     Instant afterWindow = CREATED.plus(FairShare.FLEET_ARRIVAL_WINDOW).plus(Duration.ofSeconds(1));
-    assertThat(share.invocationAllowance(pendingUnits(8), 0, Pass.MAIN, afterWindow)).isEqualTo(4);
+    assertThat(share.invocationAllowance(pendingUnits(8), 0, afterWindow)).isEqualTo(4);
   }
 }
