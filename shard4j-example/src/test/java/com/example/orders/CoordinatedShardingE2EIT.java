@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.util.List;
@@ -47,6 +46,9 @@ class CoordinatedShardingE2EIT {
   // coordinator that has never seen the suite.
   @BeforeEach
   void start() {
+    // The flaky fixture's counter is JVM-wide and shared with the other harness
+    // tests; without this the first one to run spends the failure the others need.
+    FlakyGatewayIT.resetAttempts();
     coordinator = ShardingHarness.startCoordinator();
     url = ShardingHarness.urlOf(coordinator);
   }
@@ -57,7 +59,7 @@ class CoordinatedShardingE2EIT {
   }
 
   @Test
-  void givenThreeShardsAndThreePasses_whenTheSuiteRuns_thenEveryUnitReachesOneTerminalNonFailingState()
+  void givenThreeShards_whenTheSuiteDrains_thenEveryUnitReachesOneTerminalNonFailingState()
       throws Exception {
     String sessionId = UUID.randomUUID().toString();
     ExecutorService shards = Executors.newFixedThreadPool(3);
@@ -106,12 +108,12 @@ class CoordinatedShardingE2EIT {
     assertThat(inBody.state()).isEqualTo(TestState.ABORTED);
     assertThat(inBody.reason()).contains("warehouse service");
 
-    // The failure was re-handed through the barrier and passed on a retry pass.
+    // The failure was requeued and taken again -- attempt 1 failed, attempt 2 passed.
     SessionView.TestView flaky = unit(view, "retriesAgainstTheGateway()");
     assertThat(flaky.state()).isEqualTo(TestState.PASSED);
     assertThat(flaky.records())
-        .extracting(SessionView.RecordView::pass, SessionView.RecordView::outcome)
-        .containsExactly(tuple(Pass.MAIN, Outcome.FAILED), tuple(Pass.RETRY1, Outcome.PASSED));
+        .extracting(SessionView.RecordView::attempt, SessionView.RecordView::outcome)
+        .containsExactly(tuple(1, Outcome.FAILED), tuple(2, Outcome.PASSED));
 
     // The parameterized method leased and reported as one unit.
     SessionView.TestView template = unit(view, "findsProducts(java.lang.String)");
@@ -120,14 +122,14 @@ class CoordinatedShardingE2EIT {
   }
 
   @Test
-  void givenAReleasedShard_whenALaterPassRuns_thenItCostsOnlyDiscoveryAndExecutesNothing() {
+  void givenAShardThatAlreadyDrained_whenItRunsAgain_thenItCostsOnlyDiscoveryAndExecutesNothing() {
     String sessionId = UUID.randomUUID().toString();
     List<Class<?>> suite = List.of(PingResourceIT.class, CatalogSearchIT.class);
-    ShardingHarness.ShardRun main = ShardingHarness.runShard(url, sessionId, 0, "main", suite);
+    ShardingHarness.ShardRun main = ShardingHarness.runShard(url, sessionId, 0, suite);
     assertThat(main.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
     assertThat(main.startedTests()).isNotEmpty();
 
-    ShardingHarness.ShardRun retry = ShardingHarness.runShard(url, sessionId, 0, "retry1", suite);
+    ShardingHarness.ShardRun retry = ShardingHarness.runShard(url, sessionId, 0, suite);
 
     assertThat(retry.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
     assertThat(retry.startedTests())
@@ -143,13 +145,13 @@ class CoordinatedShardingE2EIT {
     String sessionId = UUID.randomUUID().toString();
     ShardingHarness.ShardRun first =
         ShardingHarness.runShard(
-            url, sessionId, 0, "main", List.of(PingResourceIT.class, CatalogSearchIT.class));
+            url, sessionId, 0, List.of(PingResourceIT.class, CatalogSearchIT.class));
     assertThat(first.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.SUCCESSFUL);
 
     // A second shard whose discovery produced a different set: the coordinator refuses
     // and the engine surfaces the refusal as an engine-level failure naming the ids.
     ShardingHarness.ShardRun divergent =
-        ShardingHarness.runShard(url, sessionId, 1, "main", List.of(PingResourceIT.class));
+        ShardingHarness.runShard(url, sessionId, 1, List.of(PingResourceIT.class));
 
     assertThat(divergent.engineResult().getStatus()).isEqualTo(TestExecutionResult.Status.FAILED);
     assertThat(divergent.engineResult().getThrowable().orElseThrow().getMessage())
@@ -157,11 +159,13 @@ class CoordinatedShardingE2EIT {
         .contains("findsProducts");
   }
 
+  /**
+   * One run, where there used to be three. A requeued failure becomes claimable again
+   * inside the same drain, so a shard no longer needs an outer pass loop to pick up its
+   * own retries -- if this ever needs a second call to go green, the requeue is broken.
+   */
   private static List<ShardingHarness.ShardRun> runAllPasses(String sessionId, int shard) {
-    return List.of(
-        ShardingHarness.runShard(url, sessionId, shard, "main", SUITE),
-        ShardingHarness.runShard(url, sessionId, shard, "retry1", SUITE),
-        ShardingHarness.runShard(url, sessionId, shard, "retry2", SUITE));
+    return List.of(ShardingHarness.runShard(url, sessionId, shard, SUITE));
   }
 
   private static SessionView.TestView unit(SessionView view, String methodSuffix) {

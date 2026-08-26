@@ -7,7 +7,6 @@ import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionVerdict;
@@ -65,7 +64,7 @@ class LeaseExpiryIT {
         sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
 
     ClaimResponse silent =
-        client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, CLASS_NAME, List.of(testId)));
+        client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, List.of(testId)));
     assertThat(silent.granted()).hasSize(1);
     Fence deadFence = silent.granted().get(0).fence();
     assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.LEASED);
@@ -84,7 +83,7 @@ class LeaseExpiryIT {
 
     // Immediately, before expiry, the unit is not claimable by anyone else.
     ClaimResponse tooSoon =
-        client.claim(sessionId, new ClaimRequest(1, Pass.MAIN, CLASS_NAME, List.of(testId)));
+        client.claim(sessionId, new ClaimRequest(1, CLASS_NAME, List.of(testId)));
     assertThat(tooSoon.granted()).isEmpty();
 
     waitUntil(
@@ -92,7 +91,7 @@ class LeaseExpiryIT {
         "the lease should expire back to PENDING");
 
     ClaimResponse reclaimed =
-        client.claim(sessionId, new ClaimRequest(1, Pass.MAIN, CLASS_NAME, List.of(testId)));
+        client.claim(sessionId, new ClaimRequest(1, CLASS_NAME, List.of(testId)));
     assertThat(reclaimed.granted()).hasSize(1);
     Fence liveFence = reclaimed.granted().get(0).fence();
     assertThat(liveFence).isGreaterThan(deadFence);
@@ -100,13 +99,12 @@ class LeaseExpiryIT {
     CoordinatorClient.RawResponse lateWrite =
         client.resultRaw(
             sessionId,
-            new ResultRequest(
-                0, Pass.MAIN, testId, deadFence, Outcome.PASSED, 60_000, false, null, null));
+            new ResultRequest(0, testId, deadFence, Outcome.PASSED, 60_000, false, null, null));
     assertThat(lateWrite.status()).isEqualTo(409);
 
     client.result(
         sessionId,
-        new ResultRequest(1, Pass.MAIN, testId, liveFence, Outcome.PASSED, 900, false, null, null));
+        new ResultRequest(1, testId, liveFence, Outcome.PASSED, 900, false, null, null));
     assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
   }
 
@@ -126,7 +124,7 @@ class LeaseExpiryIT {
         sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
 
     ClaimResponse claimed =
-        client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, CLASS_NAME, List.of(hanging)));
+        client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, List.of(hanging)));
     assertThat(claimed.granted()).hasSize(1);
 
     waitUntil(

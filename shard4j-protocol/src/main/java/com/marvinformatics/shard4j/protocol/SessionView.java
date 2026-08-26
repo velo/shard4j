@@ -27,9 +27,8 @@ public record SessionView(
     int nacksDropped,
     int staleResultsDropped) {
 
-  /** {@code completedPass} is the shard's barrier watermark, null before its first arrival. */
   public record ShardView(
-      int shard, boolean departed, int completed, Pass completedPass, boolean released) {}
+      int shard, boolean departed, int completed, boolean released) {}
 
   /** {@code lease} is present exactly while the unit is LEASED, and null otherwise. */
   public record TestView(
@@ -38,5 +37,6 @@ public record SessionView(
   /** Who holds a live lease, under which fence, and until when -- the stranded-lease detail. */
   public record LeaseView(int shard, Fence fence, Instant expiresAt) {}
 
-  public record RecordView(Pass pass, int shard, Outcome outcome, long durationMs, Instant timestamp) {}
+  public record RecordView(
+      int attempt, int shard, Outcome outcome, long durationMs, Instant timestamp) {}
 }

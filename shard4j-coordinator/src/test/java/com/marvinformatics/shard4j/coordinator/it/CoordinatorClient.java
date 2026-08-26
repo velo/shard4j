@@ -17,7 +17,6 @@ import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -212,7 +211,7 @@ final class CoordinatorClient {
     ClaimResponse response =
         claim(
             sessionId,
-            new ClaimRequest(shard, Pass.MAIN, Ids.classNameOf(testId), List.of(testId)));
+            new ClaimRequest(shard, Ids.classNameOf(testId), List.of(testId)));
     assertThat(response.granted()).hasSize(1);
     return response.granted().get(0).fence();
   }

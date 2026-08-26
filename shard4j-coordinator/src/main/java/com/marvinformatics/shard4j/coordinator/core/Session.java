@@ -4,7 +4,6 @@ import com.marvinformatics.shard4j.protocol.BarrierResponse;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
@@ -66,6 +65,7 @@ final class Session {
   private int nacksDropped;
   private int staleResultsDropped;
   @Getter private int attempt;
+  private final int maxAttempts;
   @Getter private long epoch;
   @Getter private Instant lastActivity;
 
@@ -75,11 +75,13 @@ final class Session {
       String id,
       int attempt,
       long epoch,
+      int maxAttempts,
       Map<String, String> metadata,
       Map<String, List<ClaimableUnit>> expansion,
       Instant now) {
     this.id = id;
     this.attempt = attempt;
+    this.maxAttempts = maxAttempts;
     this.epoch = epoch;
     this.metadata = Map.copyOf(metadata == null ? Map.of() : metadata);
     expansion.forEach(
@@ -165,7 +167,7 @@ final class Session {
     for (UnitState unit : units.values()) {
       if (!unit.state.isAbsorbing()) {
         unit.state = TestState.PENDING;
-        unit.failedIn = null;
+        unit.attempts = 0;
         unit.lease = null;
       }
     }
@@ -174,24 +176,24 @@ final class Session {
     for (ShardInfo info : shards.values()) {
       info.departed = true;
       info.explicitlyDeparted = false;
-      info.completedPass = null;
+      info.idleSince = null;
       info.released = false;
     }
     fairShare.epochBumped();
   }
 
-  static boolean claimableIn(UnitState unit, Pass pass) {
-    return switch (pass) {
-      case MAIN -> unit.state == TestState.PENDING;
-      case RETRY1 -> unit.state == TestState.FAILED && unit.failedIn == Pass.MAIN;
-      case RETRY2 -> unit.state == TestState.FAILED && unit.failedIn == Pass.RETRY1;
-    };
+  /**
+   * One condition, because a failure that still has budget is put straight back to PENDING
+   * rather than parked in a pass-specific pool. There is no second question to ask.
+   */
+  static boolean isClaimable(UnitState unit) {
+    return unit.state == TestState.PENDING;
   }
 
-  /** Every claimable unit the given pass could grant right now, in registration order. */
-  List<ClaimableUnit> claimable(Pass pass) {
+  /** Every unit claimable right now, in registration order. */
+  List<ClaimableUnit> claimable() {
     return units.values().stream()
-        .filter(unit -> claimableIn(unit, pass))
+        .filter(Session::isClaimable)
         .map(unit -> unit.unit)
         .toList();
   }
@@ -202,10 +204,10 @@ final class Session {
   }
 
   /** The claimable units behind one method-level candidate: itself, or its expansion. */
-  List<ClaimableUnit> claimableUnitsOf(String censusId, Pass pass) {
+  List<ClaimableUnit> claimableUnitsOf(String censusId) {
     return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
         .map(units::get)
-        .filter(unit -> claimableIn(unit, pass))
+        .filter(Session::isClaimable)
         .map(unit -> unit.unit)
         .toList();
   }
@@ -245,21 +247,21 @@ final class Session {
         .allMatch(unit -> unit.state == TestState.PASSED || unit.state == TestState.SKIPPED);
   }
 
-  /** The open ask came back empty for this shard: it will not ask again in this pass. */
-  void markExhausted(int shard, Pass pass) {
-    fairShare.markExhausted(shard, pass);
+  /** The open ask came back empty for this shard: it has stopped pulling. */
+  void markExhausted(int shard) {
+    fairShare.markExhausted(shard);
   }
 
   /** How many more of the method's invocations this shard may lease: {@link FairShare}. */
-  int invocationAllowance(String censusId, int shard, Pass pass, Instant now) {
+  int invocationAllowance(String censusId, int shard, Instant now) {
     List<UnitState> unitsOfMethod =
         unitsByCensusId.getOrDefault(censusId, List.of()).stream().map(units::get).toList();
-    return fairShare.invocationAllowance(unitsOfMethod, shard, pass, now);
+    return fairShare.invocationAllowance(unitsOfMethod, shard, now);
   }
 
-  Pass completedPassOf(int shard) {
+  boolean isIdle(int shard) {
     ShardInfo info = shards.get(shard);
-    return info == null ? null : info.completedPass;
+    return info != null && info.idleSince != null;
   }
 
   /**
@@ -270,16 +272,24 @@ final class Session {
    * only arrival that can follow is a delayed or duplicated packet, and reviving on that
    * would resurrect a shard that will never poll again into every future quorum.
    */
-  void completePass(int shard, Pass pass, Instant now) {
+  void markIdle(int shard, Instant now) {
     ShardInfo info = shards.computeIfAbsent(shard, index -> new ShardInfo());
     if (!info.explicitlyDeparted) {
       info.departed = false;
       info.lastSeenAt = now;
     }
-    if (info.completedPass == null || info.completedPass.ordinal() < pass.ordinal()) {
-      info.completedPass = pass;
+    // First arrival wins: the clock measures how long this shard has been starved, and
+    // restarting it on every poll would make a patient shard look freshly idle forever.
+    if (info.idleSince == null) {
+      info.idleSince = now;
     }
     touch(now);
+  }
+
+  /** Work still in play: a unit claimable now, or one leased that could yet requeue. */
+  boolean hasOutstandingWork() {
+    return units.values().stream()
+        .anyMatch(unit -> unit.state == TestState.PENDING || unit.state == TestState.LEASED);
   }
 
   boolean isReleased(int shard) {
@@ -292,99 +302,81 @@ final class Session {
   }
 
   /**
-   * The barrier answer for a shard that finished {@code completedPass}. Three counts drive
-   * it: units already failed into the asker's next pool, units that may yet land there
-   * (leased, or claimable in a pass some live shard has not finished), and shards waiting
-   * at this same barrier. The next pass runs only once every live undeparted shard has
-   * finished the current one -- the first finisher must not drain an empty failure pool and
-   * leave the straggler retrying its own failures alone -- and a shard is released the
-   * moment it cannot be needed, so a barrier never costs the fleet the slowest shard's
-   * wall time for nothing. Pure decision: the caller persists and applies a release.
+   * The barrier answer for a shard that has found nothing to claim, decided by where the
+   * shard stands in the hunger queue against how much work exists or could yet exist.
+   *
+   * <p>Two counts bound how many shards are worth keeping: units claimable right now, and
+   * leases that could still come back as work if they fail. A shard ranked inside the first
+   * is told to RUN; one ranked inside the sum is held as spare capacity; anything past that
+   * is surplus and released.
+   *
+   * <p>That reconciles two rules that look opposed. A finished shard should not cost the
+   * fleet the slowest shard's wall time -- but with two shards and one test, releasing the
+   * idle one strands the next attempt on the shard that just failed it, because there is
+   * nowhere else for it to go. Sizing the hold to the work rather than releasing on a bare
+   * count keeps a spare for every lease that might return, and no more.
+   *
+   * <p>A lease on its <em>final</em> attempt is excluded from that count: it cannot requeue,
+   * so it can create no work, and holding a shard behind it would park capacity behind
+   * something whose only remaining outcomes are terminal.
    */
-  BarrierResponse barrierDecision(int shard, Pass completedPass) {
+  BarrierResponse barrierDecision(int shard, Instant now) {
     if (isReleased(shard)) {
       return done();
     }
-    Pass nextPass = nextOf(completedPass);
-    if (nextPass == null) {
-      return done();
-    }
-    int retryPool = 0;
+    int claimable = 0;
     int mayStillFail = 0;
     Instant earliestLeaseExpiry = null;
     for (UnitState unit : units.values()) {
-      if (unit.state == TestState.LEASED) {
-        mayStillFail++;
+      if (unit.state == TestState.PENDING) {
+        claimable++;
+      } else if (unit.state == TestState.LEASED) {
+        if (unit.attempts + 1 < maxAttempts) {
+          mayStillFail++;
+        }
         Instant expiresAt = unit.lease.expiresAt();
         if (earliestLeaseExpiry == null || expiresAt.isBefore(earliestLeaseExpiry)) {
           earliestLeaseExpiry = expiresAt;
         }
-        continue;
-      }
-      Pass pool = claimablePoolOf(unit);
-      if (pool == nextPass) {
-        retryPool++;
-      } else if (pool != null && someLiveShardStillReaches(pool)) {
-        mayStillFail++;
       }
     }
-    int waiting =
-        (int)
-            shards.values().stream()
-                .filter(info -> !info.departed && !info.released && info.completedPass == completedPass)
-                .count();
-    if (retryPool + mayStillFail == 0 || waiting > retryPool + mayStillFail) {
+    if (claimable + mayStillFail == 0) {
       return done();
     }
-    // The same liveness filter as the waiter count and someLiveShardStillReaches, on
-    // purpose: a released shard was told to stop pulling, can claim nothing and holds no
-    // lease, so no signal it could ever emit -- not even lease expiry -- would advance its
-    // watermark. Counting it here would park the fleet behind a shard that cannot move.
-    boolean quorumMet =
-        shards.values().stream()
-            .filter(info -> !info.departed && !info.released)
-            .allMatch(
-                info ->
-                    info.completedPass != null
-                        && info.completedPass.ordinal() >= completedPass.ordinal());
-    if (quorumMet && retryPool > 0) {
+    int rank = hungerRank(shard, now);
+    if (rank < claimable) {
       return new BarrierResponse(BarrierResponse.Action.RUN, null, null);
     }
-    return new BarrierResponse(BarrierResponse.Action.WAIT, RETRY_AFTER_SECONDS, earliestLeaseExpiry);
-  }
-
-  /** The pass that could still claim this unit, or null when no pool will ever hold it. */
-  private static Pass claimablePoolOf(UnitState unit) {
-    if (unit.state == TestState.PENDING) {
-      return Pass.MAIN;
+    if (rank < claimable + mayStillFail) {
+      return new BarrierResponse(
+          BarrierResponse.Action.WAIT, RETRY_AFTER_SECONDS, earliestLeaseExpiry);
     }
-    if (unit.state == TestState.FAILED) {
-      return nextOf(unit.failedIn);
-    }
-    return null;
+    return done();
   }
 
   /**
-   * A unit claimable in {@code pool} may yet be run -- and may yet fail -- only while some
-   * live, unreleased shard has not moved past that pass. Once every live shard is beyond
-   * it, the unit is stranded: it can never enter a retry pool and must not hold a barrier.
+   * How many live shards have been starved longer than this one. Polling is pull-based, so
+   * without an explicit order a requeued unit goes to whoever happens to ask next -- which
+   * on a fleet of equal pollers is arbitrary, and reliably starves a shard that has been
+   * waiting since long before the others arrived. Ties break on shard index so the order is
+   * total and no two shards ever read the same rank.
    */
-  private boolean someLiveShardStillReaches(Pass pool) {
-    return shards.values().stream()
-        .filter(info -> !info.departed && !info.released)
-        .anyMatch(
-            info -> {
-              Pass current = info.completedPass == null ? Pass.MAIN : nextOf(info.completedPass);
-              return current != null && current.ordinal() <= pool.ordinal();
-            });
-  }
-
-  private static Pass nextOf(Pass pass) {
-    return switch (pass) {
-      case MAIN -> Pass.RETRY1;
-      case RETRY1 -> Pass.RETRY2;
-      case RETRY2 -> null;
-    };
+  private int hungerRank(int shard, Instant now) {
+    Instant mine =
+        shards.containsKey(shard) && shards.get(shard).idleSince != null
+            ? shards.get(shard).idleSince
+            : now;
+    return (int)
+        shards.entrySet().stream()
+            .filter(entry -> entry.getKey() != shard)
+            .filter(entry -> !entry.getValue().departed && !entry.getValue().released)
+            .filter(entry -> entry.getValue().idleSince != null)
+            .filter(
+                entry -> {
+                  int byTime = entry.getValue().idleSince.compareTo(mine);
+                  return byTime < 0 || (byTime == 0 && entry.getKey() < shard);
+                })
+            .count();
   }
 
   private static BarrierResponse done() {
@@ -392,10 +384,15 @@ final class Session {
   }
 
   void lease(
-      String testId, int shard, Pass pass, Fence fence, Instant grantedAt, Instant expiresAt) {
+      String testId, int shard, Fence fence, Instant grantedAt, Instant expiresAt) {
     UnitState unit = units.get(testId);
-    unit.lease = new Lease(shard, pass, fence, grantedAt, expiresAt, unit.state, unit.failedIn);
+    unit.lease = new Lease(shard, fence, grantedAt, expiresAt, unit.state, unit.attempts);
     unit.state = TestState.LEASED;
+    // Taking work ends the wait. Without this the flag set at the barrier never cleared,
+    // so a shard that went back to work still counted as starved and the fleet released
+    // shards that were needed.
+    ShardInfo holder = shards.computeIfAbsent(shard, index -> new ShardInfo());
+    holder.idleSince = null;
   }
 
   /**
@@ -457,6 +454,17 @@ final class Session {
     return lease != null ? lease.fence() : null;
   }
 
+  /** Attempts still available to this unit, the one about to run included. */
+  int attemptsRemaining(String testId) {
+    return Math.max(0, maxAttempts - attemptsOf(testId));
+  }
+
+  /** Attempts already spent on this unit; the one being recorded now is this plus one. */
+  int attemptsOf(String testId) {
+    UnitState unit = units.get(testId);
+    return unit == null ? 0 : unit.attempts;
+  }
+
   Lease currentLease(String testId) {
     UnitState unit = units.get(testId);
     return unit != null ? unit.lease : null;
@@ -468,19 +476,23 @@ final class Session {
 
   private void restore(UnitState unit) {
     unit.state = unit.lease.origin();
-    unit.failedIn = unit.lease.originFailedIn();
+    unit.attempts = unit.lease.originAttempts();
     unit.lease = null;
   }
 
   void applyResult(
-      int shard, Pass pass, String testId, Outcome outcome, long durationMs, String reason, Instant now) {
+      int shard, String testId, Outcome outcome, long durationMs, String reason, Instant now) {
     UnitState unit = units.get(testId);
-    unit.records.add(new SessionView.RecordView(pass, shard, outcome, durationMs, now));
+    unit.records.add(
+        new SessionView.RecordView(unit.attempts + 1, shard, outcome, durationMs, now));
     switch (outcome) {
       case PASSED -> unit.state = TestState.PASSED;
       case FAILED -> {
-        unit.state = TestState.FAILED;
-        unit.failedIn = pass;
+        // The whole retry model, in two lines: spend an attempt, and go straight back to the
+        // claimable queue if any remain. No pass-specific pool and no barrier to wait on --
+        // whichever shard asks next takes it, which is usually a different one.
+        unit.attempts++;
+        unit.state = unit.attempts < maxAttempts ? TestState.PENDING : TestState.FAILED;
       }
       case SKIPPED -> {
         unit.state = TestState.SKIPPED;
@@ -524,7 +536,6 @@ final class Session {
                         entry.getKey(),
                         entry.getValue().departed,
                         entry.getValue().completed,
-                        entry.getValue().completedPass,
                         entry.getValue().released))
             .toList();
     List<SessionView.TestView> testViews =
@@ -562,7 +573,7 @@ final class Session {
   static final class UnitState {
     final ClaimableUnit unit;
     TestState state = TestState.PENDING;
-    Pass failedIn;
+    int attempts;
     Lease lease;
     String reason;
     final List<SessionView.RecordView> records = new ArrayList<>();
@@ -570,18 +581,17 @@ final class Session {
 
   record Lease(
       int shard,
-      Pass pass,
       Fence fence,
       Instant grantedAt,
       Instant expiresAt,
       TestState origin,
-      Pass originFailedIn) {}
+      int originAttempts) {}
 
   static final class ShardInfo {
     boolean departed;
     boolean explicitlyDeparted;
     int completed;
-    Pass completedPass;
+    Instant idleSince;
     boolean released;
     Instant lastSeenAt;
   }

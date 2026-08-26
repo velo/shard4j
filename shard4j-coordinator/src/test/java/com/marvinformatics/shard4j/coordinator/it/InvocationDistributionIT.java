@@ -8,7 +8,6 @@ import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionView;
@@ -65,21 +64,21 @@ class InvocationDistributionIT {
     String sessionId = UUID.randomUUID().toString();
     registerBoth(sessionId, List.of(TEMPLATE));
 
-    NextClassResponse first = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse first = client.next(sessionId, new NextClassRequest(0));
     assertThat(first.className()).isEqualTo(CLASS_NAME);
     // Fair share of five claimable units (four measured plus the probe) over a fleet of
     // two is three, and within the class the measured positions come slowest first.
     assertThat(first.granted().stream().map(Grant::testId))
         .containsExactly(invocation(4), invocation(3), invocation(2));
 
-    NextClassResponse second = client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+    NextClassResponse second = client.next(sessionId, new NextClassRequest(1));
     assertThat(second.className()).isEqualTo(CLASS_NAME);
     assertThat(second.granted().stream().map(Grant::testId))
         .containsExactly(invocation(1), invocation(5));
     assertThat(second.granted().stream().map(Grant::probe)).containsExactly(false, true);
 
     // The method is fully leased across the two shards; a third ask finds nothing.
-    assertThat(client.next(sessionId, new NextClassRequest(0, Pass.MAIN)).className()).isNull();
+    assertThat(client.next(sessionId, new NextClassRequest(0)).className()).isNull();
 
     reportPassed(sessionId, 0, first.granted());
     reportPassed(sessionId, 1, List.of(second.granted().get(0)));
@@ -112,7 +111,7 @@ class InvocationDistributionIT {
     client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(GROWING), null));
 
     // A lone shard takes both measured positions plus the probe at #3.
-    NextClassResponse next = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
     assertThat(next.granted().stream().map(Grant::testId))
         .containsExactly(
             Ids.invocation(GROWING, 2), Ids.invocation(GROWING, 1), Ids.invocation(GROWING, 3));
@@ -133,7 +132,7 @@ class InvocationDistributionIT {
         .contains(Ids.invocation(GROWING, 4));
 
     // And the new probe is claimable in the same pass: the shard's next ask receives it.
-    NextClassResponse walked = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse walked = client.next(sessionId, new NextClassRequest(0));
     assertThat(walked.granted().stream().map(Grant::testId))
         .containsExactly(Ids.invocation(GROWING, 4));
   }
@@ -143,7 +142,7 @@ class InvocationDistributionIT {
     String sessionId = UUID.randomUUID().toString();
     registerBoth(sessionId, List.of(FRESH));
 
-    NextClassResponse next = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
     assertThat(next.className()).isEqualTo(CLASS_NAME);
     assertThat(next.granted().stream().map(Grant::testId)).containsExactly(FRESH);
   }
@@ -156,16 +155,16 @@ class InvocationDistributionIT {
 
     // Fair share of five claimable units over the declared fleet of four is two: shard 0
     // leaves room for the shards still booting while shard 1 can still come back.
-    NextClassResponse first = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse first = client.next(sessionId, new NextClassRequest(0));
     assertThat(first.granted()).hasSize(2);
     // Shard 0's share is taken while shard 1 still works; its open ask comes back empty
     // and it stops pulling for the pass.
-    assertThat(client.next(sessionId, new NextClassRequest(0, Pass.MAIN)).granted()).isEmpty();
+    assertThat(client.next(sessionId, new NextClassRequest(0)).granted()).isEmpty();
 
     // Shard 1 is now the last live asker. The two declared shards never registered --
     // dead before boot -- and must not hold anything back: capping here would leave
     // three units PENDING forever, an INCOMPLETE verdict where main would have passed.
-    NextClassResponse second = client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+    NextClassResponse second = client.next(sessionId, new NextClassRequest(1));
     assertThat(second.granted()).hasSize(3);
   }
 
@@ -174,8 +173,8 @@ class InvocationDistributionIT {
     String sessionId = UUID.randomUUID().toString();
     registerBoth(sessionId, List.of(TEMPLATE));
 
-    NextClassResponse first = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
-    NextClassResponse second = client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+    NextClassResponse first = client.next(sessionId, new NextClassRequest(0));
+    NextClassResponse second = client.next(sessionId, new NextClassRequest(1));
 
     // Shard 0 fails the slowest position and passes the rest of its share.
     report(sessionId, 0, first.granted().get(0), Outcome.FAILED, "row rejected");
@@ -191,10 +190,10 @@ class InvocationDistributionIT {
 
     // The retry pool holds exactly the failed position, and the other shard may take it --
     // paying its own class setup, which is the agreed cost of spreading.
-    NextClassResponse retry = client.next(sessionId, new NextClassRequest(1, Pass.RETRY1));
+    NextClassResponse retry = client.next(sessionId, new NextClassRequest(1));
     assertThat(retry.className()).isEqualTo(CLASS_NAME);
     assertThat(retry.granted().stream().map(Grant::testId)).containsExactly(invocation(4));
-    reportPassed(sessionId, 1, retry.granted(), Pass.RETRY1);
+    reportPassed(sessionId, 1, retry.granted());
 
     SessionView view = client.view(sessionId);
     long terminal = view.tests().stream().filter(test -> test.state().isAbsorbing()).count();
@@ -207,7 +206,7 @@ class InvocationDistributionIT {
     client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(DRIFTING), null));
 
     // A lone shard is never capped: it takes all three measured positions plus the probe.
-    NextClassResponse next = client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
     assertThat(next.granted()).hasSize(4);
     Grant stale = next.granted().get(0);
     assertThat(stale.testId()).isEqualTo(DRIFTING + "/[test-template-invocation:#3]");
@@ -254,26 +253,17 @@ class InvocationDistributionIT {
   }
 
   private static void reportPassed(String sessionId, int shard, List<Grant> grants) {
-    reportPassed(sessionId, shard, grants, Pass.MAIN);
-  }
-
-  private static void reportPassed(String sessionId, int shard, List<Grant> grants, Pass pass) {
     for (Grant grant : grants) {
-      report(sessionId, shard, grant, pass, Outcome.PASSED, null);
+      report(sessionId, shard, grant, Outcome.PASSED, null);
     }
   }
 
   private static void report(
       String sessionId, int shard, Grant grant, Outcome outcome, String reason) {
-    report(sessionId, shard, grant, Pass.MAIN, outcome, reason);
-  }
-
-  private static void report(
-      String sessionId, int shard, Grant grant, Pass pass, Outcome outcome, String reason) {
     client.result(
         sessionId,
         new ResultRequest(
-            shard, pass, grant.testId(), grant.fence(), outcome, 45_000, false, reason, null));
+            shard, grant.testId(), grant.fence(), outcome, 45_000, false, reason, null));
   }
 
   private static List<Integer> shardsThatRan(SessionView view, String templateId) {

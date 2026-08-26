@@ -1,6 +1,5 @@
 package com.marvinformatics.shard4j.engine;
 
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -41,7 +40,6 @@ public record ShardConfiguration(
     String coordinatorSecret,
     String sessionId,
     int shardIndex,
-    Pass pass,
     int attempt,
     int concurrency,
     Integer shardCount,
@@ -56,7 +54,6 @@ public record ShardConfiguration(
   static final String SECRET_ENVIRONMENT = "SHARD_COORDINATOR_SECRET";
   static final String SESSION_ID = "shard.session.id";
   static final String SHARD_INDEX = "shard.index";
-  static final String PASS = "shard.pass";
   static final String ATTEMPT = "shard.attempt";
   static final String CONCURRENCY = "shard.concurrency";
   static final String SHARD_COUNT = "shard.count";
@@ -74,7 +71,7 @@ public record ShardConfiguration(
   /** The inert engine: no network call, nothing claimed, an empty discovery. */
   public static ShardConfiguration disabled() {
     return new ShardConfiguration(
-        false, null, null, null, -1, null, 1, 1, null, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+        false, null, null, null, -1, 1, 1, null, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
   }
 
   static ShardConfiguration resolve(
@@ -89,7 +86,6 @@ public record ShardConfiguration(
         resolver.secret(),
         resolver.required(SESSION_ID),
         resolver.requiredInt(SHARD_INDEX),
-        resolver.pass(),
         resolver.positiveInt(ATTEMPT, 1),
         resolver.positiveInt(CONCURRENCY, 1),
         resolver.shardCount(),
@@ -157,16 +153,6 @@ public record ShardConfiguration(
             ENABLED + " is true but " + SECRET_ENVIRONMENT + " is not exported.");
       }
       return secret;
-    }
-
-    private Pass pass() {
-      String value = required(PASS);
-      try {
-        return Pass.valueOf(value.toUpperCase(Locale.ROOT));
-      } catch (IllegalArgumentException e) {
-        throw new ShardConfigurationException(
-            PASS + " must be one of main, retry1, retry2 -- got: " + value);
-      }
     }
 
     private Integer shardCount() {

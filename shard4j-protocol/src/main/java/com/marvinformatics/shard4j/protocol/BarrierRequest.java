@@ -6,4 +6,4 @@ package com.marvinformatics.shard4j.protocol;
  * after an epoch bump a zombie of the previous attempt must not be able to resurrect
  * itself into the waiter tally or the quorum of an attempt it is not part of.
  */
-public record BarrierRequest(int shard, long epoch, Pass completedPass) {}
+public record BarrierRequest(int shard, long epoch) {}

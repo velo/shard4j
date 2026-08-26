@@ -3,7 +3,6 @@ package com.marvinformatics.shard4j.coordinator.storage;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -72,7 +71,7 @@ class SessionLogTest {
 
   private static LogRecord completion(String testId, Instant now) {
     return LogRecord.unitCompletion(
-        "example/orders-service", "7f3a", 1, testId, 0, Pass.MAIN, Outcome.PASSED, 1000, false,
+        "example/orders-service", "7f3a", 1, testId, 0, 1, Outcome.PASSED, 1000, false,
         null, now);
   }
 

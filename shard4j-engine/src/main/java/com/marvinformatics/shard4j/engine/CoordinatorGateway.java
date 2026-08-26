@@ -14,7 +14,6 @@ import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -122,7 +121,7 @@ class CoordinatorGateway {
         () ->
             api.next(
                 configuration.sessionId(),
-                new NextClassRequest(configuration.shardIndex(), configuration.pass())));
+                new NextClassRequest(configuration.shardIndex())));
   }
 
   synchronized List<Grant> claim(String className, List<String> candidates) {
@@ -131,7 +130,7 @@ class CoordinatorGateway {
                 api.claim(
                     configuration.sessionId(),
                     new ClaimRequest(
-                        configuration.shardIndex(), configuration.pass(), className, candidates)))
+                        configuration.shardIndex(), className, candidates)))
         .granted();
   }
 
@@ -147,7 +146,7 @@ class CoordinatorGateway {
             api.claim(
                 configuration.sessionId(),
                 new ClaimRequest(
-                    configuration.shardIndex(), configuration.pass(), "keepalive", List.of())));
+                    configuration.shardIndex(), "keepalive", List.of())));
   }
 
   /**
@@ -159,7 +158,6 @@ class CoordinatorGateway {
     ResultRequest request =
         new ResultRequest(
             configuration.shardIndex(),
-            configuration.pass(),
             result.unitId().value(),
             fence,
             result.outcome(),
@@ -193,12 +191,12 @@ class CoordinatorGateway {
         });
   }
 
-  synchronized BarrierResponse barrier(Pass completedPass) {
+  synchronized BarrierResponse barrier() {
     return withSession(
         () ->
             api.barrier(
                 configuration.sessionId(),
-                new BarrierRequest(configuration.shardIndex(), epoch, completedPass)));
+                new BarrierRequest(configuration.shardIndex(), epoch)));
   }
 
   synchronized void depart() {

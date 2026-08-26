@@ -3,7 +3,6 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -21,7 +20,6 @@ class ShardConfigurationTest {
     parameters.put(ShardConfiguration.COORDINATOR_URL, "http://localhost:1");
     parameters.put(ShardConfiguration.SESSION_ID, "7f3a");
     parameters.put(ShardConfiguration.SHARD_INDEX, "3");
-    parameters.put(ShardConfiguration.PASS, "retry1");
     return parameters;
   }
 
@@ -62,7 +60,6 @@ class ShardConfigurationTest {
     assertThat(configuration.coordinatorSecret()).isEqualTo("test-secret");
     assertThat(configuration.sessionId()).isEqualTo("7f3a");
     assertThat(configuration.shardIndex()).isEqualTo(3);
-    assertThat(configuration.pass()).isEqualTo(Pass.RETRY1);
     assertThat(configuration.attempt()).isEqualTo(2);
     assertThat(configuration.concurrency()).isEqualTo(2);
     assertThat(configuration.retryBudget()).isEqualTo(Duration.ofSeconds(90));
@@ -139,19 +136,7 @@ class ShardConfigurationTest {
 
     assertThat(configuration.enabled()).isTrue();
     assertThat(configuration.coordinatorUrl()).isEqualTo("http://localhost:2");
-    assertThat(configuration.pass()).isEqualTo(Pass.MAIN);
     assertThat(configuration.metadata()).containsEntry("sha", "d7f561f");
-  }
-
-  @Test
-  void givenAnUnknownPass_whenResolving_thenTheFailureListsTheValidOnes() {
-    Map<String, String> parameters = completeParameters();
-    parameters.put(ShardConfiguration.PASS, "retry9");
-
-    assertThatThrownBy(() -> resolve(parameters, SECRET_ONLY))
-        .isInstanceOf(ShardConfigurationException.class)
-        .hasMessageContaining("retry9")
-        .hasMessageContaining("main");
   }
 
   @Test

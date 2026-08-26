@@ -19,7 +19,6 @@ import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -64,6 +63,7 @@ public final class CoordinatorCore {
   private final long incarnation;
   private final Duration leaseTtl;
   private final int maxClaimBatch;
+  private final int maxAttempts;
   private final Duration gcIdle;
   private long seq;
 
@@ -79,6 +79,7 @@ public final class CoordinatorCore {
       String tenantKey,
       long incarnation,
       Duration leaseTtl,
+      int maxAttempts,
       int maxClaimBatch,
       Duration gcIdle) {
     this.sessionLog = sessionLog;
@@ -89,6 +90,7 @@ public final class CoordinatorCore {
     this.incarnation = incarnation;
     this.leaseTtl = leaseTtl;
     this.maxClaimBatch = maxClaimBatch;
+    this.maxAttempts = maxAttempts;
     this.gcIdle = gcIdle;
   }
 
@@ -112,6 +114,7 @@ public final class CoordinatorCore {
                 sessionId,
                 request.attempt(),
                 1,
+                maxAttempts,
                 request.metadata(),
                 distribution.expandCensus(request.tests()),
                 now);
@@ -169,10 +172,10 @@ public final class CoordinatorCore {
       }
       List<ClaimableUnit> claimable =
           request.candidates().stream()
-              .flatMap(candidate -> session.claimableUnitsOf(candidate, request.pass()).stream())
+              .flatMap(candidate -> session.claimableUnitsOf(candidate).stream())
               .toList();
       List<ClaimableUnit> ordered = orderFor(claimable);
-      List<Grant> granted = grantCapped(session, request.shard(), request.pass(), ordered, now);
+      List<Grant> granted = grantCapped(session, request.shard(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
@@ -201,7 +204,7 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<ClaimableUnit> ordered = orderFor(session.claimable(request.pass()));
+      List<ClaimableUnit> ordered = orderFor(session.claimable());
       Set<String> triedClasses = new LinkedHashSet<>();
       for (ClaimableUnit top : ordered) {
         String className = top.className();
@@ -211,7 +214,7 @@ public final class CoordinatorCore {
         List<ClaimableUnit> inChosenClass =
             ordered.stream().filter(unit -> className.equals(unit.className())).toList();
         List<Grant> granted =
-            grantCapped(session, request.shard(), request.pass(), inChosenClass, now);
+            grantCapped(session, request.shard(), inChosenClass, now);
         if (!granted.isEmpty()) {
           joinLogged(sessionId, session, request.shard(), now);
           return new NextClassResponse(className, granted);
@@ -223,7 +226,7 @@ public final class CoordinatorCore {
       // The empty answer is a commitment: the shard's pull loop stops on it, so it is
       // remembered -- the fair-share cap must never again hold anything back for a shard
       // that will not ask.
-      session.markExhausted(request.shard(), request.pass());
+      session.markExhausted(request.shard());
       joinLogged(sessionId, session, request.shard(), now);
       return new NextClassResponse(null, List.of());
     }
@@ -236,7 +239,7 @@ public final class CoordinatorCore {
    * a template whose spreading is the entire point of expanding it.
    */
   private List<Grant> grantCapped(
-      Session session, int shard, Pass pass, List<ClaimableUnit> ordered, Instant now) {
+      Session session, int shard, List<ClaimableUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
     Map<String, Integer> allowanceLeft = new HashMap<>();
     for (ClaimableUnit unit : ordered) {
@@ -246,7 +249,7 @@ public final class CoordinatorCore {
       if (unit.invocation() != null) {
         int left =
             allowanceLeft.computeIfAbsent(
-                unit.censusId(), id -> session.invocationAllowance(id, shard, pass, now));
+                unit.censusId(), id -> session.invocationAllowance(id, shard, now));
         if (left <= 0) {
           continue;
         }
@@ -254,8 +257,14 @@ public final class CoordinatorCore {
       }
       Fence fence = new Fence(session.epoch(), incarnation, ++seq);
       Instant expiresAt = now.plus(leaseTtl);
-      session.lease(unit.id(), shard, pass, fence, now, expiresAt);
-      granted.add(new Grant(unit.id(), fence, expiresAt, unit.probe()));
+      session.lease(unit.id(), shard, fence, now, expiresAt);
+      granted.add(
+          new Grant(
+              unit.id(),
+              fence,
+              expiresAt,
+              unit.probe(),
+              session.attemptsRemaining(unit.id())));
     }
     return granted;
   }
@@ -283,9 +292,8 @@ public final class CoordinatorCore {
             sessionId);
         throw new StaleFenceException(lease == null ? null : lease.fence());
       }
-      // The fence proves the caller holds the lease, so a shard or pass that disagrees with
-      // it is a client bug -- and a mislabelled pass would corrupt the failedIn bookkeeping
-      // that decides which retry pool a failure lands in.
+      // The fence proves the caller holds the lease, so a shard that disagrees with it is a
+      // client bug.
       if (lease.shard() != request.shard()) {
         throw new ProtocolViolationException(
             "Result for "
@@ -294,15 +302,6 @@ public final class CoordinatorCore {
                 + request.shard()
                 + " but the lease is held by shard "
                 + lease.shard());
-      }
-      if (lease.pass() != request.pass()) {
-        throw new ProtocolViolationException(
-            "Result for "
-                + request.testId()
-                + " reports pass "
-                + request.pass()
-                + " but the lease was granted for pass "
-                + lease.pass());
       }
       // The lease-to-result span is a sanity bound on the engine-measured duration, not the
       // measurement: under batched claims the span legitimately exceeds the duration, so
@@ -318,6 +317,7 @@ public final class CoordinatorCore {
             observedSpanMs);
       }
       String reason = truncate(request.reason());
+      int attempt = session.attemptsOf(request.testId()) + 1;
       sessionLog.append(
           LogRecord.unitCompletion(
               tenantKey,
@@ -325,7 +325,7 @@ public final class CoordinatorCore {
               session.epoch(),
               request.testId(),
               request.shard(),
-              request.pass(),
+              attempt,
               request.outcome(),
               request.durationMs(),
               request.firstOnShard(),
@@ -333,13 +333,12 @@ public final class CoordinatorCore {
               now));
       session.applyResult(
           request.shard(),
-          request.pass(),
           request.testId(),
           request.outcome(),
           request.durationMs(),
           reason,
           now);
-      appendHistory(sessionId, session.epoch(), request, reason, now);
+      appendHistory(sessionId, session.epoch(), request, attempt, reason, now);
       distribution.recordDurations(sessionId, session, request);
       return new ResultResponse(true, null);
     }
@@ -398,17 +397,13 @@ public final class CoordinatorCore {
   }
 
   /**
-   * The barrier: arrival is the pass-completion report, polled while waiting. The decision
-   * itself lives in the session; this method makes what it decides durable -- the pass
-   * watermark and any early release go through the completion log, because a restart that
-   * forgot either would re-grant work to a released shard or hold a quorum open for a
-   * shard that already finished.
+   * The barrier: arrival is a shard's report that its open ask came back empty, polled
+   * while it waits. The decision itself lives in the session; this method makes what it
+   * decides durable -- the idle watermark and any early release go through the completion
+   * log, because a restart that forgot either would re-grant work to a released shard or
+   * hold a quorum open for a shard that already finished.
    */
   public BarrierResponse barrier(String sessionId, BarrierRequest request) {
-    if (request.completedPass() == null) {
-      throw new ProtocolViolationException(
-          "completedPass is required; a barrier arrival is the pass-completion report");
-    }
     synchronized (writeLock) {
       Instant now = clock.instant();
       Session session = requireSession(sessionId, now);
@@ -416,32 +411,25 @@ public final class CoordinatorCore {
         throw new StaleEpochException(request.epoch(), session.epoch());
       }
       sweepSilentShards(sessionId, session, now);
-      Pass completedSoFar = session.completedPassOf(request.shard());
-      if (completedSoFar == null || completedSoFar.ordinal() < request.completedPass().ordinal()) {
+      if (!session.isIdle(request.shard())) {
         sessionLog.append(
-            LogRecord.passComplete(
-                tenantKey,
-                sessionId,
-                session.epoch(),
-                request.shard(),
-                request.completedPass(),
-                now));
+            LogRecord.shardIdle(tenantKey, sessionId, session.epoch(), request.shard(), now));
       }
-      session.completePass(request.shard(), request.completedPass(), now);
-      BarrierResponse decision = session.barrierDecision(request.shard(), request.completedPass());
-      // DONE after the final pass just means nothing is left; recording it as RELEASED
-      // would claim an early-release decision that was never made.
+      session.markIdle(request.shard(), now);
+      BarrierResponse decision = session.barrierDecision(request.shard(), now);
+      // DONE because the session is finished is not an early release, and recording it as
+      // one would claim a decision that was never made. Only a shard told to stop while
+      // work is still outstanding elsewhere is released.
       if (decision.action() == BarrierResponse.Action.DONE
-          && request.completedPass() != Pass.RETRY2
+          && session.hasOutstandingWork()
           && !session.isReleased(request.shard())) {
         sessionLog.append(
             LogRecord.released(tenantKey, sessionId, session.epoch(), request.shard(), now));
         session.release(request.shard());
         log.info(
-            "Session {}: shard {} released after {}; it will claim nothing further",
+            "Session {}: shard {} released early; it will claim nothing further",
             sessionId,
-            request.shard(),
-            request.completedPass());
+            request.shard());
       }
       return decision;
     }
@@ -470,7 +458,7 @@ public final class CoordinatorCore {
           case JOINED -> replayJoined(record);
           case COMPLETION -> replayCompletion(record);
           case NACK -> replayNack(record);
-          case PASS_COMPLETE -> replayPassComplete(record);
+          case SHARD_IDLE -> replayShardIdle(record);
           case DEPARTED -> replayDeparted(record);
           case RELEASED -> replayReleased(record);
         }
@@ -492,6 +480,7 @@ public final class CoordinatorCore {
               record.session(),
               record.attempt(),
               record.epoch(),
+              maxAttempts,
               record.metadata(),
               distribution.expandCensus(record.tests()),
               record.ts()));
@@ -531,7 +520,6 @@ public final class CoordinatorCore {
     }
     session.applyResult(
         record.shard(),
-        record.pass(),
         record.testId(),
         record.outcome(),
         record.durationMs(),
@@ -556,10 +544,10 @@ public final class CoordinatorCore {
     }
   }
 
-  private void replayPassComplete(LogRecord record) {
+  private void replayShardIdle(LogRecord record) {
     Session session = sessions.get(record.session());
     if (session != null) {
-      session.completePass(record.shard(), record.pass(), record.ts());
+      session.markIdle(record.shard(), record.ts());
     }
   }
 
@@ -638,7 +626,7 @@ public final class CoordinatorCore {
   }
 
   private void appendHistory(
-      String sessionId, long epoch, ResultRequest request, String reason, Instant now) {
+      String sessionId, long epoch, ResultRequest request, int attempt, String reason, Instant now) {
     historyLog.append(
         LogRecord.unitCompletion(
             tenantKey,
@@ -646,7 +634,7 @@ public final class CoordinatorCore {
             epoch,
             request.testId(),
             request.shard(),
-            request.pass(),
+            attempt,
             request.outcome(),
             request.durationMs(),
             request.firstOnShard(),
@@ -661,7 +649,7 @@ public final class CoordinatorCore {
                 epoch,
                 invocation.testId(),
                 request.shard(),
-                request.pass(),
+                attempt,
                 invocation.outcome(),
                 invocation.durationMs(),
                 truncate(invocation.reason()),

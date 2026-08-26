@@ -121,7 +121,7 @@ final class ShardLoop {
   private void abandonOutstanding(String cause) {
     List<NackRequest.NackedLease> nacks =
         Reconciliation.abandoned(
-            ledger.drainAll(), configuration.shardIndex(), configuration.pass(), cause);
+            ledger.drainAll(), configuration.shardIndex(), cause);
     if (nacks.isEmpty()) {
       return;
     }
@@ -238,6 +238,10 @@ final class ShardLoop {
               jupiter.nestedRootId(),
               false,
               Set.copyOf(leased),
+              unitId -> {
+                Grant grant = byUnit.get(unitId);
+                return grant != null && grant.retryable();
+              },
               result -> reportCompleted(byUnit, result));
       jupiter.execute(batch, request, listener);
     }
@@ -306,7 +310,7 @@ final class ShardLoop {
       return;
     }
     Reconciliation reconciliation =
-        Reconciliation.classify(unexplained, configuration.shardIndex(), configuration.pass());
+        Reconciliation.classify(unexplained, configuration.shardIndex());
     gateway.nack(reconciliation.nacks());
     if (reconciliation.failure() == null) {
       log.log(
@@ -338,9 +342,7 @@ final class ShardLoop {
     outcomes.keySet().forEach(unit -> classes.add(classNameOf(unit)));
     if (classes.size() > 1) {
       throw new ShardExecutionException(
-          "Every unit this shard leased in pass "
-              + configuration.pass()
-              + " ended ABORTED, spanning "
+          "Every unit this shard leased ended ABORTED, spanning "
               + classes.size()
               + " classes -- that is an environment failure, not a set of assumptions: "
               + String.join(", ", classes));
@@ -355,7 +357,7 @@ final class ShardLoop {
    */
   private void holdAtBarrier(LivenessKeepalive keepalive) {
     while (true) {
-      BarrierResponse response = gateway.barrier(configuration.pass());
+      BarrierResponse response = gateway.barrier();
       switch (response.action()) {
         case RUN, DONE -> {
           return;

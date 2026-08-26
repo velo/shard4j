@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.TestDescriptor;
 import org.junit.platform.engine.TestExecutionResult;
@@ -45,6 +46,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   private final UniqueId nestedRootId;
   private final boolean forwardEngineNode;
   private final Set<String> leasedUnits;
+  private final Predicate<String> retryable;
   private final Consumer<UnitResult> onUnitComplete;
 
   private final Map<String, UnitResult> finalized = new HashMap<>();
@@ -56,10 +58,12 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       UniqueId nestedRootId,
       boolean forwardEngineNode,
       Set<ExecutionId> leasedUnits,
+      Predicate<String> retryable,
       Consumer<UnitResult> onUnitComplete) {
     this.downstream = downstream;
     this.nestedRootId = nestedRootId;
     this.forwardEngineNode = forwardEngineNode;
+    this.retryable = retryable;
     this.leasedUnits = new HashSet<>();
     leasedUnits.forEach(unit -> this.leasedUnits.add(unit.value()));
     this.onUnitComplete = onUnitComplete;
@@ -118,7 +122,31 @@ final class UnitOutcomeListener implements EngineExecutionListener {
           wireId, outcome, prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))));
     }
     if (forward(descriptor)) {
-      downstream.executionFinished(descriptor, result);
+      downstream.executionFinished(descriptor, downgradeIfRetryable(descriptor, result));
+    }
+  }
+
+  /**
+   * A failure the coordinator will requeue is reported to the *launcher* as aborted, so a
+   * shard stays green while a retry is still owed and only an exhausted budget reddens it.
+   * This rewrite is one-directional on purpose: {@link #finalize} above has already handed
+   * the coordinator the real FAILED, and it must keep doing so -- the coverage verdict
+   * counts ABORTED as terminal-OK, so downgrading toward the coordinator would convert a
+   * genuine failure into passing coverage.
+   */
+  private TestExecutionResult downgradeIfRetryable(
+      TestDescriptor descriptor, TestExecutionResult result) {
+    if (result.getStatus() != TestExecutionResult.Status.FAILED
+        || !retryable.test(ExecutionIdentity.leaseId(descriptor).value())) {
+      return result;
+    }
+    return TestExecutionResult.aborted(new RetryPending(result.getThrowable().orElse(null)));
+  }
+
+  /** Marks a failure the coordinator still owes a retry; never escapes the launcher report. */
+  static final class RetryPending extends RuntimeException {
+    RetryPending(Throwable cause) {
+      super("failed; the coordinator will requeue this unit for another attempt", cause);
     }
   }
 

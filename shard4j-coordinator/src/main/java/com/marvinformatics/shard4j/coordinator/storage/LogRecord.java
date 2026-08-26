@@ -2,7 +2,6 @@ package com.marvinformatics.shard4j.coordinator.storage;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -30,7 +29,7 @@ public record LogRecord(
     String testId,
     Boolean unit,
     Integer shard,
-    Pass pass,
+    Integer unitAttempt,
     Outcome outcome,
     Long durationMs,
     Boolean firstOnShard,
@@ -43,7 +42,7 @@ public record LogRecord(
     JOINED,
     COMPLETION,
     NACK,
-    PASS_COMPLETE,
+    SHARD_IDLE,
     DEPARTED,
     RELEASED
   }
@@ -74,7 +73,7 @@ public record LogRecord(
       long epoch,
       String testId,
       int shard,
-      Pass pass,
+      int unitAttempt,
       Outcome outcome,
       long durationMs,
       boolean firstOnShard,
@@ -88,7 +87,7 @@ public record LogRecord(
         .testId(testId)
         .unit(true)
         .shard(shard)
-        .pass(pass)
+        .unitAttempt(unitAttempt)
         .outcome(outcome)
         .durationMs(durationMs)
         .firstOnShard(firstOnShard)
@@ -103,7 +102,7 @@ public record LogRecord(
       long epoch,
       String testId,
       int shard,
-      Pass pass,
+      int unitAttempt,
       Outcome outcome,
       long durationMs,
       String reason,
@@ -116,7 +115,7 @@ public record LogRecord(
         .testId(testId)
         .unit(false)
         .shard(shard)
-        .pass(pass)
+        .unitAttempt(unitAttempt)
         .outcome(outcome)
         .durationMs(durationMs)
         .reason(reason)
@@ -145,16 +144,15 @@ public record LogRecord(
         .build();
   }
 
-  /** Barrier arrival: the shard's report that it finished {@code pass}. */
-  public static LogRecord passComplete(
-      String project, String session, long epoch, int shard, Pass pass, Instant ts) {
+  /** Barrier arrival: the shard's report that it has run out of work to pull. */
+  public static LogRecord shardIdle(
+      String project, String session, long epoch, int shard, Instant ts) {
     return LogRecord.builder()
-        .type(Type.PASS_COMPLETE)
+        .type(Type.SHARD_IDLE)
         .project(project)
         .session(session)
         .epoch(epoch)
         .shard(shard)
-        .pass(pass)
         .ts(ts)
         .build();
   }

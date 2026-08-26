@@ -1,6 +1,5 @@
 package com.marvinformatics.shard4j.engine;
 
-import com.marvinformatics.shard4j.protocol.Pass;
 import java.time.Duration;
 import java.util.Map;
 
@@ -15,7 +14,6 @@ final class ShardConfigurationBuilder {
   private final String coordinatorUrl;
   private final String sessionId;
   private int shardIndex;
-  private Pass pass = Pass.MAIN;
   private int concurrency = 1;
   private Integer shardCount;
 
@@ -30,11 +28,6 @@ final class ShardConfigurationBuilder {
 
   ShardConfigurationBuilder shardIndex(int shardIndex) {
     this.shardIndex = shardIndex;
-    return this;
-  }
-
-  ShardConfigurationBuilder pass(Pass pass) {
-    this.pass = pass;
     return this;
   }
 
@@ -55,7 +48,6 @@ final class ShardConfigurationBuilder {
         CoordinatorContainer.SECRET,
         sessionId,
         shardIndex,
-        pass,
         1,
         concurrency,
         shardCount,

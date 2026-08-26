@@ -7,7 +7,6 @@ import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -63,7 +62,7 @@ class SlowestFirstOrderingIT {
         sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
 
     ClaimResponse response =
-        client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, CLASS_NAME, census));
+        client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, census));
     List<String> grantedOrder = response.granted().stream().map(Grant::testId).toList();
 
     List<String> expectedUnknowns = new ArrayList<>(List.of(NEW_A, NEW_B));

@@ -9,7 +9,6 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.RegisterResponse;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -84,8 +83,7 @@ class SessionLoopIT {
   }
 
   private static ResultRequest passed(int shard, String testId, Fence fence, long durationMs) {
-    return new ResultRequest(
-        shard, Pass.MAIN, testId, fence, Outcome.PASSED, durationMs, false, null, null);
+    return new ResultRequest(shard, testId, fence, Outcome.PASSED, durationMs, false, null, null);
   }
 
   @Test
@@ -101,7 +99,7 @@ class SessionLoopIT {
         client.claim(
             sessionId,
             new ClaimRequest(
-                0, Pass.MAIN, ALPHA, List.of(Ids.method(ALPHA, "first"), Ids.method(ALPHA, "second"))));
+                0, ALPHA, List.of(Ids.method(ALPHA, "first"), Ids.method(ALPHA, "second"))));
     assertThat(alphaByShard0.granted()).hasSize(2);
 
     // The whole class is already leased: the other shard gets an empty grant and skips it.
@@ -109,7 +107,7 @@ class SessionLoopIT {
         client.claim(
             sessionId,
             new ClaimRequest(
-                1, Pass.MAIN, ALPHA, List.of(Ids.method(ALPHA, "first"), Ids.method(ALPHA, "second"))));
+                1, ALPHA, List.of(Ids.method(ALPHA, "first"), Ids.method(ALPHA, "second"))));
     assertThat(alphaByShard1.granted()).isEmpty();
 
     for (var grant : alphaByShard0.granted()) {
@@ -120,9 +118,7 @@ class SessionLoopIT {
     Fence templateFence = client.claimOne(sessionId, 1, templateId);
     client.result(
         sessionId,
-        new ResultRequest(
-            1,
-            Pass.MAIN,
+        new ResultRequest(1,
             templateId,
             templateFence,
             Outcome.PASSED,
@@ -137,16 +133,13 @@ class SessionLoopIT {
     Fence skippedFence = client.claimOne(sessionId, 1, skippedId);
     client.result(
         sessionId,
-        new ResultRequest(
-            1, Pass.MAIN, skippedId, skippedFence, Outcome.SKIPPED, 5, false, "disabled by annotation", null));
+        new ResultRequest(1, skippedId, skippedFence, Outcome.SKIPPED, 5, false, "disabled by annotation", null));
 
     String abortedId = Ids.method(GAMMA, "needsLocalService");
     Fence abortedFence = client.claimOne(sessionId, 1, abortedId);
     client.result(
         sessionId,
-        new ResultRequest(
-            1,
-            Pass.MAIN,
+        new ResultRequest(1,
             abortedId,
             abortedFence,
             Outcome.ABORTED,
@@ -184,40 +177,49 @@ class SessionLoopIT {
   }
 
   @Test
-  void givenAFailedUnit_whenClaiming_thenClaimableInTheNextPassAndNeverBefore() {
+  void givenAFailedUnit_whenClaiming_thenImmediatelyClaimableUntilTheBudgetIsSpent() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
-
     String failing = Ids.method(ALPHA, "first");
-    Fence fence = client.claimOne(sessionId, 0, failing);
-    client.result(
-        sessionId,
-        new ResultRequest(0, Pass.MAIN, failing, fence, Outcome.FAILED, 2_000, false, null, null));
 
-    ClaimResponse mainAgain =
-        client.claim(sessionId, new ClaimRequest(0, Pass.MAIN, ALPHA, List.of(failing)));
-    assertThat(mainAgain.granted()).isEmpty();
+    // Attempts one and two: each failure puts the unit straight back on the queue, with
+    // no pass to wait for. The grant says how much budget is left, which is what lets the
+    // engine decide whether to report the failure to the launcher as aborted or as failed.
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      ClaimResponse claimed =
+          client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing)));
+      assertThat(claimed.granted()).as("attempt %d must be claimable", attempt).hasSize(1);
+      assertThat(claimed.granted().get(0).attemptsRemaining()).isEqualTo(4 - attempt);
+      client.result(
+          sessionId,
+          new ResultRequest(
+              0,
+              failing,
+              claimed.granted().get(0).fence(),
+              Outcome.FAILED,
+              2_000,
+              false,
+              null,
+              null));
+    }
 
-    ClaimResponse retry2 =
-        client.claim(sessionId, new ClaimRequest(0, Pass.RETRY2, ALPHA, List.of(failing)));
-    assertThat(retry2.granted()).isEmpty();
-
-    ClaimResponse retry1 =
-        client.claim(sessionId, new ClaimRequest(0, Pass.RETRY1, ALPHA, List.of(failing)));
-    assertThat(retry1.granted()).hasSize(1);
+    // The third and final attempt: still claimable, but with no budget behind it.
+    ClaimResponse last = client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing)));
+    assertThat(last.granted()).hasSize(1);
+    assertThat(last.granted().get(0).attemptsRemaining()).isEqualTo(1);
+    assertThat(last.granted().get(0).retryable()).isFalse();
     client.result(
         sessionId,
         new ResultRequest(
-            0,
-            Pass.RETRY1,
-            failing,
-            retry1.granted().get(0).fence(),
-            Outcome.PASSED,
-            2_500,
-            false,
-            null,
-            null));
-    assertThat(client.stateOf(sessionId, failing)).isEqualTo(TestState.PASSED);
+            0, failing, last.granted().get(0).fence(), Outcome.FAILED, 2_000, false, null, null));
+
+    // Spent: terminally FAILED, and never handed out again however often it is asked for.
+    assertThat(client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing))).granted())
+        .as("an exhausted unit must never be granted again")
+        .isEmpty();
+    SessionView view = client.view(sessionId);
+    assertThat(CoordinatorClient.stateOf(view, failing)).isEqualTo(TestState.FAILED);
+    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
   }
 
   @Test
@@ -229,15 +231,14 @@ class SessionLoopIT {
     Fence fence = client.claimOne(sessionId, 0, failing);
     client.result(
         sessionId,
-        new ResultRequest(0, Pass.MAIN, failing, fence, Outcome.FAILED, 500, false, null, null));
+        new ResultRequest(0, failing, fence, Outcome.FAILED, 500, false, null, null));
     String leased = Ids.method(ALPHA, "second");
     Fence leasedFence = client.claimOne(sessionId, 0, leased);
     String absorbed = Ids.method(GAMMA, "disabledUpstream");
     Fence absorbedFence = client.claimOne(sessionId, 0, absorbed);
     client.result(
         sessionId,
-        new ResultRequest(
-            0, Pass.MAIN, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null));
+        new ResultRequest(0, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null));
 
     RegisterResponse rejoined = client.register(sessionId, registration(3, 2));
     assertThat(rejoined.epoch()).isEqualTo(2);
@@ -295,15 +296,13 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse reasonless =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0, Pass.MAIN, skipped, fence, Outcome.SKIPPED, 1, false, null, null));
+            new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, null, null));
     assertThat(reasonless.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse inconsistentAggregate =
         client.resultRaw(
             sessionId,
-            new ResultRequest(
-                0,
-                Pass.MAIN,
+            new ResultRequest(0,
                 skipped,
                 fence,
                 Outcome.PASSED,
@@ -316,7 +315,7 @@ class SessionLoopIT {
     // Neither rejection consumed the lease: a well-formed report still lands.
     client.result(
         sessionId,
-        new ResultRequest(0, Pass.MAIN, skipped, fence, Outcome.SKIPPED, 1, false, "disabled", null));
+        new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, "disabled", null));
     assertThat(client.stateOf(sessionId, skipped)).isEqualTo(TestState.SKIPPED);
   }
 
@@ -335,9 +334,7 @@ class SessionLoopIT {
 
     client.result(
         sessionId,
-        new ResultRequest(
-            0,
-            Pass.MAIN,
+        new ResultRequest(0,
             templateId,
             fence,
             Outcome.PASSED,
@@ -363,7 +360,7 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse response =
         client.claimRaw(
             sessionId,
-            new ClaimRequest(0, Pass.MAIN, ALPHA, List.of(Ids.method(ALPHA, "neverRegistered"))));
+            new ClaimRequest(0, ALPHA, List.of(Ids.method(ALPHA, "neverRegistered"))));
     assertThat(response.status()).isEqualTo(409);
   }
 
@@ -373,7 +370,7 @@ class SessionLoopIT {
    * retry pool.
    */
   @Test
-  void givenALeasedUnit_whenTheResultContradictsTheLease_thenRejectedWith400() {
+  void givenALeasedUnit_whenTheResultNamesAnotherShard_thenRejectedWith400() {
     String sessionId = UUID.randomUUID().toString();
     client.register(sessionId, registration(0, 1));
     String testId = Ids.method(ALPHA, "first");
@@ -382,17 +379,10 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse wrongShard =
         client.resultRaw(
             sessionId,
-            new ResultRequest(3, Pass.MAIN, testId, fence, Outcome.PASSED, 10, false, null, null));
+            new ResultRequest(3, testId, fence, Outcome.PASSED, 10, false, null, null));
     assertThat(wrongShard.status()).isEqualTo(400);
 
-    CoordinatorClient.RawResponse wrongPass =
-        client.resultRaw(
-            sessionId,
-            new ResultRequest(
-                0, Pass.RETRY1, testId, fence, Outcome.PASSED, 10, false, null, null));
-    assertThat(wrongPass.status()).isEqualTo(400);
-
-    // Neither rejection consumed the lease: the honest report still lands.
+    // The rejection did not consume the lease: the honest report still lands.
     client.result(sessionId, passed(0, testId, fence, 10));
     assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
   }

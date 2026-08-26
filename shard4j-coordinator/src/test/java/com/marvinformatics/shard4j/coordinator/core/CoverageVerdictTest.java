@@ -29,7 +29,7 @@ class CoverageVerdictTest {
                 test("a", TestState.PASSED),
                 test("b", TestState.SKIPPED),
                 test("c", TestState.ABORTED)),
-            List.of(new SessionView.ShardView(0, false, 3, null, false)));
+            List.of(new SessionView.ShardView(0, false, 3, false)));
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
   }
 
@@ -38,7 +38,7 @@ class CoverageVerdictTest {
     SessionView view =
         view(
             List.of(test("a", TestState.PASSED), test("b", TestState.FAILED)),
-            List.of(new SessionView.ShardView(0, false, 2, null, false)));
+            List.of(new SessionView.ShardView(0, false, 2, false)));
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
   }
 
@@ -54,8 +54,8 @@ class CoverageVerdictTest {
         view(
             List.of(test("a", TestState.PASSED), test("b", TestState.PENDING)),
             List.of(
-                new SessionView.ShardView(0, true, 1, null, false),
-                new SessionView.ShardView(1, true, 0, null, false)));
+                new SessionView.ShardView(0, true, 1, false),
+                new SessionView.ShardView(1, true, 0, false)));
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.INCOMPLETE);
   }
 
@@ -64,7 +64,7 @@ class CoverageVerdictTest {
     SessionView view =
         view(
             List.of(test("a", TestState.PENDING)),
-            List.of(new SessionView.ShardView(0, false, 0, null, false)));
+            List.of(new SessionView.ShardView(0, false, 0, false)));
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
   }
 }

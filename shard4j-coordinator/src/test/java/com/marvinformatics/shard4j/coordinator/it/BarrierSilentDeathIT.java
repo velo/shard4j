@@ -10,7 +10,6 @@ import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionVerdict;
@@ -73,29 +72,20 @@ class BarrierSilentDeathIT {
     Fence flakyFence = client.claimOne(sessionId, 0, flaky);
     client.result(
         sessionId,
-        new ResultRequest(0, Pass.MAIN, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null));
+        new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null));
 
-    // While the dead shard's lease is live, the survivor is told how long that can last.
-    BarrierResponse waiting =
-        client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN));
-    assertThat(waiting.action()).isEqualTo(BarrierResponse.Action.WAIT);
-    assertThat(waiting.earliestLeaseExpiry()).isNotNull();
+    // Its own failure requeued the moment it was reported, so there is work to take and
+    // no barrier to wait behind: the retry pool is no longer gated by a pass.
+    BarrierResponse ownRetry = client.barrier(sessionId, new BarrierRequest(0, 1));
+    assertThat(ownRetry.action()).isEqualTo(BarrierResponse.Action.RUN);
 
-    // Expiry marks the holder departed and drops it from the quorum; the survivor runs.
-    BarrierResponse unblocked = pollUntilNotWaiting(sessionId, 0, Pass.MAIN);
-    assertThat(unblocked.action()).isEqualTo(BarrierResponse.Action.RUN);
-
-    // Only the genuine failure is retry work; the dead shard's unit fell back to the main
-    // pool, which no live shard will ever claim from again.
     ClaimResponse retry =
-        client.claim(sessionId, new ClaimRequest(0, Pass.RETRY1, CLASS_NAME, census));
+        client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, census));
     assertThat(retry.granted()).hasSize(1);
     assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
     client.result(
         sessionId,
-        new ResultRequest(
-            0,
-            Pass.RETRY1,
+        new ResultRequest(0,
             flaky,
             retry.granted().get(0).fence(),
             Outcome.PASSED,
@@ -104,8 +94,36 @@ class BarrierSilentDeathIT {
             null,
             null));
 
-    // The stranded unit must not hold the next barrier open: nothing can retry it.
-    assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.RETRY1)).action())
+    // Nothing else is claimable yet -- the dead shard still nominally holds its unit --
+    // so the survivor is told to wait, and told how long that can last.
+    BarrierResponse waiting = client.barrier(sessionId, new BarrierRequest(0, 1));
+    assertThat(waiting.action()).isEqualTo(BarrierResponse.Action.WAIT);
+    assertThat(waiting.earliestLeaseExpiry()).isNotNull();
+
+    // Expiry returns the unit to the queue, and the survivor takes it. This is the whole
+    // gain from requeueing: the dead shard's work is recovered by whoever is still alive,
+    // where the pass-gated model stranded it in a pool no live shard could reach and
+    // reported INCOMPLETE.
+    BarrierResponse unblocked = pollUntilNotWaiting(sessionId, 0);
+    assertThat(unblocked.action()).isEqualTo(BarrierResponse.Action.RUN);
+
+    ClaimResponse rescued =
+        client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, census));
+    assertThat(rescued.granted()).hasSize(1);
+    assertThat(rescued.granted().get(0).testId()).isEqualTo(doomed);
+    client.result(
+        sessionId,
+        new ResultRequest(
+            0,
+            doomed,
+            rescued.granted().get(0).fence(),
+            Outcome.PASSED,
+            800,
+            false,
+            null,
+            null));
+
+    assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
         .isEqualTo(BarrierResponse.Action.DONE);
 
     client.depart(sessionId, new DepartRequest(0, 1));
@@ -117,15 +135,15 @@ class BarrierSilentDeathIT {
                 .orElseThrow()
                 .departed())
         .isTrue();
-    assertThat(CoordinatorClient.stateOf(view, doomed)).isEqualTo(TestState.PENDING);
-    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.INCOMPLETE);
+    assertThat(CoordinatorClient.stateOf(view, doomed)).isEqualTo(TestState.PASSED);
+    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.PASSED);
   }
 
-  private static BarrierResponse pollUntilNotWaiting(String sessionId, int shard, Pass pass)
+  private static BarrierResponse pollUntilNotWaiting(String sessionId, int shard)
       throws InterruptedException {
     Instant deadline = Instant.now().plusSeconds(15);
     while (true) {
-      BarrierResponse response = client.barrier(sessionId, new BarrierRequest(shard, 1, pass));
+      BarrierResponse response = client.barrier(sessionId, new BarrierRequest(shard, 1));
       if (response.action() != BarrierResponse.Action.WAIT) {
         return response;
       }

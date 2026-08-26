@@ -10,7 +10,6 @@ import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.SessionVerdict;
@@ -59,20 +58,22 @@ class BarrierRestartIT {
       Fence mineFence = client.claimOne(sessionId, 0, mine);
       client.result(
           sessionId,
-          new ResultRequest(0, Pass.MAIN, mine, mineFence, Outcome.PASSED, 900, false, null, null));
+          new ResultRequest(0, mine, mineFence, Outcome.PASSED, 900, false, null, null));
       Fence flakyFence = client.claimOne(sessionId, 0, flaky);
       client.result(
           sessionId,
-          new ResultRequest(0, Pass.MAIN, flaky, flakyFence, Outcome.FAILED, 700, false, null, null));
-      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN)).action())
-          .isEqualTo(BarrierResponse.Action.WAIT);
+          new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 700, false, null, null));
+      // Its own failure is back on the queue, so there is work to take rather than a
+      // barrier to wait behind. What this test is really about starts after the kill.
+      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
+          .isEqualTo(BarrierResponse.Action.RUN);
 
       Fence yoursFence = client.claimOne(sessionId, 1, yours);
       client.result(
           sessionId,
-          new ResultRequest(1, Pass.MAIN, yours, yoursFence, Outcome.PASSED, 800, false, null, null));
+          new ResultRequest(1, yours, yoursFence, Outcome.PASSED, 800, false, null, null));
       // Two waiters for one unit of retry work: shard 1 is released.
-      assertThat(client.barrier(sessionId, new BarrierRequest(1, 1, Pass.MAIN)).action())
+      assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
           .isEqualTo(BarrierResponse.Action.DONE);
 
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
@@ -88,23 +89,21 @@ class BarrierRestartIT {
       // The release survived: the failed unit is in shard 1's candidates, and it still
       // claims nothing.
       ClaimResponse releasedClaim =
-          client.claim(sessionId, new ClaimRequest(1, Pass.RETRY1, CLASS_NAME, census));
+          client.claim(sessionId, new ClaimRequest(1, CLASS_NAME, census));
       assertThat(releasedClaim.granted()).isEmpty();
 
       // The departure and shard 1's watermark survived: neither the ghost nor the released
       // shard holds the quorum, so the retained waiter is released into the retry pass.
-      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1, Pass.MAIN)).action())
+      assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
           .isEqualTo(BarrierResponse.Action.RUN);
 
       ClaimResponse retry =
-          client.claim(sessionId, new ClaimRequest(0, Pass.RETRY1, CLASS_NAME, census));
+          client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, census));
       assertThat(retry.granted()).hasSize(1);
       assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
       client.result(
           sessionId,
-          new ResultRequest(
-              0,
-              Pass.RETRY1,
+          new ResultRequest(0,
               flaky,
               retry.granted().get(0).fence(),
               Outcome.PASSED,

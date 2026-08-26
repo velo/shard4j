@@ -6,7 +6,6 @@ import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import com.marvinformatics.shard4j.protocol.ResultResponse;
@@ -75,8 +74,7 @@ class StaleFenceIT {
     CoordinatorClient.RawResponse zombieWrite =
         client.resultRaw(
             sessionId,
-            new ResultRequest(
-                0, Pass.MAIN, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null));
+            new ResultRequest(0, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null));
     assertThat(zombieWrite.status()).isEqualTo(409);
     ResultResponse rejection = zombieWrite.bodyAs(ResultResponse.class);
     assertThat(rejection.accepted()).isFalse();
@@ -103,8 +101,7 @@ class StaleFenceIT {
 
     client.result(
         sessionId,
-        new ResultRequest(
-            1, Pass.MAIN, contested, holderFence, Outcome.PASSED, 5_000, false, null, null));
+        new ResultRequest(1, contested, holderFence, Outcome.PASSED, 5_000, false, null, null));
     SessionView finalView = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(finalView, contested)).isEqualTo(TestState.PASSED);
     assertThat(

@@ -10,7 +10,6 @@ import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
 import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
-import com.marvinformatics.shard4j.protocol.Pass;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
 import java.io.IOException;
@@ -53,8 +52,8 @@ class TwoSlotBarrierIT {
     coordinator.stop();
   }
 
-  private static BarrierResponse arrive(String sessionId, int shard, Pass completedPass) {
-    return client.barrier(sessionId, new BarrierRequest(shard, 1, completedPass));
+  private static BarrierResponse arrive(String sessionId, int shard) {
+    return client.barrier(sessionId, new BarrierRequest(shard, 1));
   }
 
   @Test
@@ -68,18 +67,18 @@ class TwoSlotBarrierIT {
 
     // Shard 0's two slots: two open asks, two different classes, both leases outstanding.
     NextClassResponse firstAsk =
-        client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+        client.next(sessionId, new NextClassRequest(0));
     NextClassResponse secondAsk =
-        client.next(sessionId, new NextClassRequest(0, Pass.MAIN));
+        client.next(sessionId, new NextClassRequest(0));
     assertThat(firstAsk.granted()).hasSize(1);
     assertThat(secondAsk.granted()).hasSize(1);
     assertThat(secondAsk.className()).isNotEqualTo(firstAsk.className());
 
     // Nothing left for shard 1; it finishes its (empty) pass and arrives at the barrier.
     NextClassResponse nothingLeft =
-        client.next(sessionId, new NextClassRequest(1, Pass.MAIN));
+        client.next(sessionId, new NextClassRequest(1));
     assertThat(nothingLeft.granted()).isEmpty();
-    BarrierResponse bothBusy = arrive(sessionId, 1, Pass.MAIN);
+    BarrierResponse bothBusy = arrive(sessionId, 1);
     assertThat(bothBusy.action()).isEqualTo(BarrierResponse.Action.WAIT);
     assertThat(bothBusy.earliestLeaseExpiry()).isNotNull();
 
@@ -87,10 +86,9 @@ class TwoSlotBarrierIT {
     Grant firstGrant = firstAsk.granted().get(0);
     client.result(
         sessionId,
-        new ResultRequest(
-            0, Pass.MAIN, firstGrant.testId(), firstGrant.fence(), Outcome.PASSED, 1_000, true,
+        new ResultRequest(0, firstGrant.testId(), firstGrant.fence(), Outcome.PASSED, 1_000, true,
             null, null));
-    BarrierResponse oneStillBusy = arrive(sessionId, 1, Pass.MAIN);
+    BarrierResponse oneStillBusy = arrive(sessionId, 1);
     assertThat(oneStillBusy.action()).isEqualTo(BarrierResponse.Action.WAIT);
 
     // The second drain fails its unit. Shard 0 arrives only now -- a shard never reaches
@@ -99,18 +97,17 @@ class TwoSlotBarrierIT {
     Grant secondGrant = secondAsk.granted().get(0);
     client.result(
         sessionId,
-        new ResultRequest(
-            0, Pass.MAIN, secondGrant.testId(), secondGrant.fence(), Outcome.FAILED, 1_000, false,
+        new ResultRequest(0, secondGrant.testId(), secondGrant.fence(), Outcome.FAILED, 1_000, false,
             null, null));
-    assertThat(arrive(sessionId, 0, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.DONE);
-    assertThat(arrive(sessionId, 1, Pass.MAIN).action()).isEqualTo(BarrierResponse.Action.RUN);
+    assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.DONE);
+    assertThat(arrive(sessionId, 1).action()).isEqualTo(BarrierResponse.Action.RUN);
 
     // The second slot's failure is ordinary retry-pool work: the other shard claims it.
     String failedId = secondGrant.testId();
     ClaimResponse retryClaim =
         client.claim(
             sessionId,
-            new ClaimRequest(1, Pass.RETRY1, Ids.classNameOf(failedId), List.of(failedId)));
+            new ClaimRequest(1, Ids.classNameOf(failedId), List.of(failedId)));
     assertThat(retryClaim.granted()).hasSize(1);
   }
 }
