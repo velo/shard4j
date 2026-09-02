@@ -28,7 +28,8 @@ import tools.jackson.core.type.TypeReference;
  * The in-memory duration aggregate behind slowest-first ordering, and the per-invocation
  * breakdown behind invocation distribution.
  *
- * <p>Estimate = median of a unit's PASSED durations over its last five distinct sessions.
+ * <p>Estimate = median of a unit's measured durations -- PASSED or ABORTED, the outcomes
+ * that ran -- over its last five distinct sessions.
  * Sessions, not records, so retries in one run cannot degenerate the window to "this run
  * only". First-on-shard rows are excluded because per-JVM setup lands entirely on whichever
  * unit runs first -- unless a unit has no other rows, in which case they are used rather
@@ -116,7 +117,7 @@ public final class DurationStore {
   private final Set<String> lowConfidenceFlagged = new HashSet<>();
   private boolean dirty;
 
-  public synchronized void recordPassed(
+  public synchronized void recordMeasured(
       HistoryKey key, String session, long durationMs, boolean firstOnShard) {
     if (outOfRange(key, durationMs)) {
       return;
@@ -315,7 +316,7 @@ public final class DurationStore {
   /**
    * Rebuilds the store from raw history lines. Whole-unit rows feed the method aggregate;
    * invocation-suffixed rows -- individually-leased invocations and the per-row records a
-   * whole template reports -- feed the breakdown. A template whose aggregate PASSED
+   * whole template reports -- feed the breakdown. A template whose aggregate measured work
    * enumerated every row it materialised, so its breakdown is marked complete; a
    * distributed session's completeness was a live judgement over the whole session and is
    * not reconstructable from rows alone, so those sessions rebuild as duration data only
@@ -335,8 +336,8 @@ public final class DurationStore {
         continue;
       }
       boolean wholeUnit = Boolean.TRUE.equals(record.unit()) && unit.invocation() == null;
-      if (wholeUnit && record.outcome() == Outcome.PASSED) {
-        recordPassed(
+      if (wholeUnit && record.outcome().measuredWork()) {
+        recordMeasured(
             unit.historyKey(),
             record.session(),
             record.durationMs(),
@@ -344,7 +345,7 @@ public final class DurationStore {
         if (unit.template()) {
           completeMarks.add(new CompleteMark(unit.historyKey().value(), record.session()));
         }
-      } else if (unit.invocation() != null && record.outcome() == Outcome.PASSED) {
+      } else if (unit.invocation() != null && record.outcome().measuredWork()) {
         recordInvocation(unit.historyKey(), record.session(), unit.invocation(), record.durationMs());
       } else if (unit.invocation() != null && record.outcome() == Outcome.SKIPPED) {
         recordInvocation(unit.historyKey(), record.session(), unit.invocation(), 0);

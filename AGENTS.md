@@ -26,10 +26,20 @@ those, that step is wrong.
 | `shard4j-coordinator` | 25 |
 
 The two published libraries land on **someone else's classpath**. `shard4j-engine` in
-particular ends up on every consumer's test classpath, and it pins JUnit Platform 1.14,
-whose own floor is 17. Raising the engine to 21 or 25 would gate adoption of a test-sharding
-library on a JDK the adopting project may not run yet -- the cost lands on the consumer,
-not on us, which is exactly the wrong place for it.
+particular ends up on every consumer's test classpath. Raising it to 21 or 25 would gate
+adoption of a test-sharding library on a JDK the adopting project may not run yet -- the
+cost lands on the consumer, not on us, which is exactly the wrong place for it.
+
+**17 is our floor, not an inherited one, and the docs used to claim otherwise.** Both of
+the things the engine plugs into target Java 8: JUnit Platform 1.14 and Jupiter 5.14 ship
+class file major 52 with `Require-Capability: osgi.ee=JavaSE version=1.8` (it is JUnit
+6.x / Platform 6.x that moves to 17), and `maven-surefire-plugin` / `maven-failsafe-plugin`
+3.5.x build at `javaVersion=8`. What actually holds the engine at 17 is its own source:
+39 records across `shard4j-protocol` and `shard4j-engine`, plus a handful of switch
+expressions. Lowering the floor is therefore possible and purely mechanical, and it is the
+only thing standing between a consumer still on 11 and this library -- but it is a
+deliberate rewrite of both published modules, not a property change. Do not restore the
+JUnit-floor claim to justify staying at 17; if 17 is kept, keep it for the reason above.
 
 The coordinator is a **deployed service**: it is nobody's dependency, its runtime is chosen
 by whoever deploys it, and it is free to sit on the current LTS.
@@ -208,8 +218,11 @@ themselves into repository secrets, which buys a little convenience for a lot of
 radius.
 
 `org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
-They are what set the engine's release-17 floor, and a bot must not be the thing that moves
-it.
+Not because they set today's release-17 floor -- JUnit Platform 1.14 is a Java 8 artifact,
+see the baselines above -- but because a major bump is where that would change: Platform
+6.x does require 17, so a bot taking that step would hand every consumer a JDK requirement
+on the engine's behalf. A minor is a decision; a major is a decision someone has to make on
+purpose.
 
 ## Repository hygiene
 

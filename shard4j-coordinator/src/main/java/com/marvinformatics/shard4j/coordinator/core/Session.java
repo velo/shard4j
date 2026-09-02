@@ -234,7 +234,7 @@ final class Session {
     return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
         .map(units::get)
         .filter(unit -> !unit.unit.probe())
-        .allMatch(unit -> unit.state == TestState.PASSED || unit.state == TestState.SKIPPED);
+        .allMatch(unit -> unit.state.isAbsorbing());
   }
 
   /** The open ask came back empty for this shard: it has stopped pulling. */

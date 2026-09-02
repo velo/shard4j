@@ -78,25 +78,31 @@ final class InvocationDistribution {
   }
 
   /**
-   * What a completed unit teaches the scheduler. A whole unit feeds the method aggregate
-   * as ever, and a PASSED template additionally contributes its per-row breakdown, marked
-   * complete because a passing aggregate enumerated every row it materialised. An
+   * What a completed unit teaches the scheduler. A whole unit feeds the method aggregate,
+   * and a template that measured work additionally contributes its per-row breakdown,
+   * marked complete because such an aggregate enumerated every row it materialised. An
    * individually-leased invocation contributes its own position -- a skipped row at
    * duration zero, so a conditionally-skipped position stays in the plan instead of
    * silently leaving the hand-out -- and the breakdown is marked complete only once every
-   * measured position of the method has absorbed without failing. A probe that
+   * measured position of the method has reached an absorbing state. A probe that
    * materialises at all is real growth -- passing, failing, skipping or aborting, it
    * proved the position exists -- so the next position is probed in the same session and
    * the plan walks the growth instead of discovering one row per run.
+   *
+   * <p>{@link Outcome#measuredWork()} is the gate, not {@code == PASSED}: a template
+   * whose rows include an assumption-skipped one aggregates to ABORTED, and gating on
+   * PASSED left such a method with no history at all -- so it leased whole in every
+   * session and one shard ran the lot. A suite that skips by assumption is the common
+   * case, not the corner.
    */
   void recordDurations(String sessionId, Session session, ResultRequest request) {
     ClaimableUnit unit = session.unitOf(request.testId());
     HistoryKey key = unit.historyKey();
     if (unit.invocation() == null) {
-      if (request.outcome() != Outcome.PASSED) {
+      if (!request.outcome().measuredWork()) {
         return;
       }
-      durations.recordPassed(key, sessionId, request.durationMs(), request.firstOnShard());
+      durations.recordMeasured(key, sessionId, request.durationMs(), request.firstOnShard());
       if (request.invocations() == null || request.invocations().isEmpty()) {
         return;
       }
@@ -134,7 +140,7 @@ final class InvocationDistribution {
             next);
       }
     }
-    if (request.outcome() != Outcome.PASSED && request.outcome() != Outcome.SKIPPED) {
+    if (request.outcome() == Outcome.FAILED) {
       return;
     }
     long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
