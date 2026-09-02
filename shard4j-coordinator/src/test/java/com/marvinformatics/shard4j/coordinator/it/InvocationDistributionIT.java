@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.Grant;
+import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.NackResponse;
 import com.marvinformatics.shard4j.protocol.NextClassRequest;
@@ -38,6 +39,9 @@ class InvocationDistributionIT {
   private static final String FRESH = Ids.template(CLASS_NAME, "freshRows(java.lang.String)");
   private static final String DRIFTING = Ids.template(CLASS_NAME, "driftingRows(java.lang.String)");
   private static final String GROWING = Ids.template(CLASS_NAME, "growingRows(java.lang.String)");
+  private static final String ASSUMING = Ids.template(CLASS_NAME, "assumingRows(java.lang.String)");
+  private static final String SEEDED_ASSUMING =
+      Ids.template(CLASS_NAME, "seededAssumingRows(java.lang.String)");
 
   static GenericContainer<?> coordinator;
   static CoordinatorClient client;
@@ -49,6 +53,7 @@ class InvocationDistributionIT {
         dataDir, TEMPLATE, Map.of(1, 40_000L, 2, 50_000L, 3, 60_000L, 4, 70_000L));
     History.seedTemplate(dataDir, DRIFTING, Map.of(1, 30_000L, 2, 35_000L, 3, 45_000L));
     History.seedTemplate(dataDir, GROWING, Map.of(1, 10_000L, 2, 20_000L));
+    History.seedTemplate(dataDir, SEEDED_ASSUMING, Map.of(1, 25_000L, 2, 15_000L));
     coordinator = CoordinatorContainers.coordinator(dataDir, Map.of());
     coordinator.start();
     client = new CoordinatorClient(coordinator);
@@ -241,6 +246,90 @@ class InvocationDistributionIT {
             DRIFTING + "/[test-template-invocation:#1]",
             DRIFTING + "/[test-template-invocation:#2]",
             DRIFTING + "/[test-template-invocation:#3]");
+  }
+
+  /** ABORTED every run, and that report is a distributing method's one chance to teach. */
+  @Test
+  void givenATemplateAggregatingToAborted_whenItReportsWhole_thenTheNextSessionDistributes() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(ASSUMING), null));
+
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
+    assertThat(next.granted().stream().map(Grant::testId)).containsExactly(ASSUMING);
+
+    client.result(
+        sessionId,
+        new ResultRequest(
+            0,
+            ASSUMING,
+            next.granted().get(0).fence(),
+            Outcome.ABORTED,
+            75_000,
+            false,
+            "assumption failed: staging quota exhausted",
+            List.of(
+                new InvocationRecord(Ids.invocation(ASSUMING, 1), Outcome.PASSED, 30_000, null),
+                new InvocationRecord(Ids.invocation(ASSUMING, 2), Outcome.PASSED, 45_000, null),
+                new InvocationRecord(
+                    Ids.invocation(ASSUMING, 3), Outcome.ABORTED, 0, "assumption failed"))));
+
+    // The aborting row keeps its place, so it still runs the day its assumption holds.
+    assertThat(measuredPlanOf(ASSUMING))
+        .containsExactly(
+            Ids.invocation(ASSUMING, 1), Ids.invocation(ASSUMING, 2), Ids.invocation(ASSUMING, 3));
+  }
+
+  /** A plan refreshes only once every measured position absorbs; an abort must not block it. */
+  @Test
+  void givenAnAbortedRowBesideGrowth_whenTheNextSessionRegisters_thenTheGrownPlanIsRemembered() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(SEEDED_ASSUMING), null));
+
+    // A lone shard is never capped: both measured positions plus the probe past them.
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
+    assertThat(next.granted().stream().map(Grant::testId))
+        .containsExactly(
+            Ids.invocation(SEEDED_ASSUMING, 1),
+            Ids.invocation(SEEDED_ASSUMING, 2),
+            Ids.invocation(SEEDED_ASSUMING, 3));
+
+    report(sessionId, 0, next.granted().get(0), Outcome.PASSED, null);
+    report(sessionId, 0, next.granted().get(1), Outcome.ABORTED, "assumption failed");
+    // The probe materialised: there really is a third row now, and #4 is probed in turn.
+    report(sessionId, 0, next.granted().get(2), Outcome.PASSED, null);
+
+    NextClassResponse walked = client.next(sessionId, new NextClassRequest(0));
+    assertThat(walked.granted().stream().map(Grant::testId))
+        .containsExactly(Ids.invocation(SEEDED_ASSUMING, 4));
+    client.nack(
+        sessionId,
+        new NackRequest(
+            0,
+            List.of(
+                new NackRequest.NackedLease(
+                    walked.granted().get(0).testId(),
+                    walked.granted().get(0).fence(),
+                    "probe vanished",
+                    true))));
+
+    // 3 was a probe last session and is a measured position now: that is what proves the
+    // growth was absorbed rather than rediscovered.
+    assertThat(measuredPlanOf(SEEDED_ASSUMING))
+        .containsExactly(
+            Ids.invocation(SEEDED_ASSUMING, 1),
+            Ids.invocation(SEEDED_ASSUMING, 2),
+            Ids.invocation(SEEDED_ASSUMING, 3));
+  }
+
+  /** What a shard would be handed, minus the probe -- appended whatever the plan is. */
+  private static List<String> measuredPlanOf(String templateId) {
+    String probeSession = UUID.randomUUID().toString();
+    client.register(probeSession, new RegisterRequest(0, 1, Map.of(), List.of(templateId), null));
+    return client.next(probeSession, new NextClassRequest(0)).granted().stream()
+        .filter(grant -> !grant.probe())
+        .map(Grant::testId)
+        .sorted()
+        .toList();
   }
 
   private static void registerBoth(String sessionId, List<String> census) {
