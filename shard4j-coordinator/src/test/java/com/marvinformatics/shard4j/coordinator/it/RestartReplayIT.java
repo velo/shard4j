@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.marvinformatics.shard4j.protocol.Fence;
+import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -154,4 +155,59 @@ class RestartReplayIT {
     }
   }
 
+  /**
+   * A template with an assumption-skipped row aggregates to ABORTED, and the fold must
+   * learn from that exactly as the live path did -- otherwise a restart un-distributes the
+   * method and nothing about the failure names a restart as its cause.
+   */
+  @Test
+  void givenAnAbortedTemplate_whenTheCoordinatorRestarts_thenTheReplayedPlanStillDistributes()
+      throws Exception {
+    Path dataDir = Files.createTempDirectory(Path.of("target"), "aborted-template-data");
+    String template = Ids.template(CLASS_A, "assumingRows(java.lang.String)");
+    String sessionId = UUID.randomUUID().toString();
+
+    GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      first.start();
+      CoordinatorClient client = new CoordinatorClient(first);
+      client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(template), null));
+      Fence fence = client.claimOne(sessionId, 0, template);
+      client.result(
+          sessionId,
+          new ResultRequest(
+              0,
+              template,
+              fence,
+              Outcome.ABORTED,
+              60_000,
+              false,
+              "assumption failed: staging quota exhausted",
+              List.of(
+                  new InvocationRecord(Ids.invocation(template, 1), Outcome.PASSED, 20_000, null),
+                  new InvocationRecord(
+                      Ids.invocation(template, 2), Outcome.ABORTED, 0, "assumption failed"),
+                  new InvocationRecord(Ids.invocation(template, 3), Outcome.PASSED, 40_000, null))));
+      first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
+    } finally {
+      first.stop();
+    }
+
+    GenericContainer<?> second = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      second.start();
+      CoordinatorClient client = new CoordinatorClient(second);
+      String replayed = UUID.randomUUID().toString();
+      client.register(replayed, new RegisterRequest(0, 1, Map.of(), List.of(template), null));
+      // Three measured positions plus the probe: the aborting row kept its place.
+      assertThat(client.view(replayed).tests().stream().map(SessionView.TestView::testId))
+          .containsExactlyInAnyOrder(
+              Ids.invocation(template, 1),
+              Ids.invocation(template, 2),
+              Ids.invocation(template, 3),
+              Ids.invocation(template, 4));
+    } finally {
+      second.stop();
+    }
+  }
 }
