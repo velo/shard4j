@@ -30,11 +30,12 @@ particular ends up on every consumer's test classpath. Raising it to 21 or 25 wo
 adoption of a test-sharding library on a JDK the adopting project may not run yet -- the
 cost lands on the consumer, not on us, which is exactly the wrong place for it.
 
-**17 is our floor, not an inherited one.** Both things the engine plugs into target Java 8:
-JUnit Platform 1.14 and Jupiter 5.14 ship class file major 52 (Platform 6.x is where that
-moves to 17), and surefire/failsafe 3.5.x build at `javaVersion=8`. What holds the engine
-at 17 is its own source -- records and switch expressions throughout both published
-modules -- so lowering it is mechanical but is a deliberate rewrite, not a property change.
+**17 is inherited, and no longer negotiable.** JUnit Platform 6 declares
+`Require-Capability: osgi.ee=JavaSE version=17`, so the engine cannot target lower whatever
+its own sources look like. It was self-imposed while the engine sat on Platform 1.14, which
+was a Java 8 artifact -- as surefire and failsafe still are -- and that is worth remembering
+only so nobody re-opens the question: lowering the floor is now impossible, not merely a
+rewrite.
 
 The coordinator is a **deployed service**: it is nobody's dependency, its runtime is chosen
 by whoever deploys it, and it is free to sit on the current LTS.
@@ -212,12 +213,12 @@ a PAT to close the gap would put a long-lived credential with write access to th
 themselves into repository secrets, which buys a little convenience for a lot of blast
 radius.
 
-`org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions.
-Not because they set today's release-17 floor -- JUnit Platform 1.14 is a Java 8 artifact,
-see the baselines above -- but because a major bump is where that would change: Platform
-6.x does require 17, so a bot taking that step would hand every consumer a JDK requirement
-on the engine's behalf. A minor is a decision; a major is a decision someone has to make on
-purpose.
+`org.junit:junit-bom` and `io.github.openfeign:feign-bom` are ignored for major versions,
+and the JUnit 5 to 6 move is why the rule exists rather than an argument against it. That
+bump changed the engine's Java floor, dropped `ConfigurationParameters.size()`, added a
+parameter to the one Platform method this engine calls, and put a new jar on every
+consumer's test classpath. Every one of those needed a human. A minor is a decision; a
+major is a decision someone has to make on purpose.
 
 ## Repository hygiene
 

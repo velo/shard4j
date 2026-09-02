@@ -60,7 +60,7 @@
 
     <!-- JUnit Platform 1.14.x is the engine's floor and the reason the shipped
          baseline is 17 rather than something newer. -->
-    <junit.bom.version>5.14.4</junit.bom.version>
+    <junit.bom.version>6.1.3</junit.bom.version>
     <feign.version>13.14</feign.version>
     <lombok.version>1.18.46</lombok.version>
     <jackson.version>2.22.2</jackson.version>

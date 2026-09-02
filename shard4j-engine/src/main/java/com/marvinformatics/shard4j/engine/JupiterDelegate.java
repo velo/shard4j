@@ -80,7 +80,9 @@ final class JupiterDelegate {
   /**
    * One nested execution. The store is a child of the outer request's, closed when the
    * batch ends, so batch-scoped resources are released without touching the launcher's own
-   * store lifecycle.
+   * store lifecycle. The cancellation token is the outer request's, not a fresh one: a
+   * launcher cancelling the run has to reach the tests actually executing, which are all
+   * inside these nested requests.
    */
   void execute(TestDescriptor descriptor, ExecutionRequest outer, EngineExecutionListener listener) {
     try (NamespacedHierarchicalStore<Namespace> store =
@@ -91,7 +93,8 @@ final class JupiterDelegate {
               listener,
               outer.getConfigurationParameters(),
               outer.getOutputDirectoryCreator(),
-              store));
+              store,
+              outer.getCancellationToken()));
     }
   }
 

@@ -16,6 +16,7 @@ import org.junit.platform.engine.ConfigurationParameters;
 import org.junit.platform.engine.DiscoveryFilter;
 import org.junit.platform.engine.DiscoverySelector;
 import org.junit.platform.engine.EngineDiscoveryRequest;
+import org.junit.platform.engine.CancellationToken;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.OutputDirectoryCreator;
@@ -60,7 +61,8 @@ class ExecutionIdentityTest {
             request.getConfigurationParameters(),
             request.getOutputDirectoryCreator(),
             new NamespacedHierarchicalStore<Namespace>(
-                new NamespacedHierarchicalStore<Namespace>(null))));
+                new NamespacedHierarchicalStore<Namespace>(null)),
+            CancellationToken.disabled()));
   }
 
   private static TestDescriptor descriptor(String uniqueIdSuffix) {
@@ -185,11 +187,6 @@ class ExecutionIdentityTest {
         @Override
         public Set<String> keySet() {
           return Set.of();
-        }
-
-        @Override
-        public int size() {
-          return 0;
         }
       };
     }
