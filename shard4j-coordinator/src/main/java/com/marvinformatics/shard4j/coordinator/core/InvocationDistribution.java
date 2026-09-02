@@ -78,43 +78,38 @@ final class InvocationDistribution {
   }
 
   /**
-   * What a completed unit teaches the scheduler. A whole unit feeds the method aggregate,
-   * and a template that measured work additionally contributes its per-row breakdown,
-   * marked complete because such an aggregate enumerated every row it materialised. An
-   * individually-leased invocation contributes its own position -- a skipped row at
-   * duration zero, so a conditionally-skipped position stays in the plan instead of
-   * silently leaving the hand-out -- and the breakdown is marked complete only once every
-   * measured position of the method has reached an absorbing state. A probe that
-   * materialises at all is real growth -- passing, failing, skipping or aborting, it
-   * proved the position exists -- so the next position is probed in the same session and
-   * the plan walks the growth instead of discovering one row per run.
-   *
-   * <p>{@link Outcome#measuredWork()} is the gate, not {@code == PASSED}: a template
-   * whose rows include an assumption-skipped one aggregates to ABORTED, and gating on
-   * PASSED left such a method with no history at all -- so it leased whole in every
-   * session and one shard ran the lot. A suite that skips by assumption is the common
-   * case, not the corner.
+   * What a completed unit teaches the scheduler, in two independent parts: the aggregate
+   * estimate, which only a pass may set, and the breakdown behind distribution, which any
+   * outcome carrying rows contributes to through {@link DurationStore#rowDuration}. Keeping
+   * them apart is what lets a template with an assumption-skipped row -- so an ABORTED
+   * aggregate -- distribute without its abort touching the ordering median. The breakdown
+   * completes only when every row was usable, and per-invocation only once every measured
+   * position has absorbed.
    */
   void recordDurations(String sessionId, Session session, ResultRequest request) {
     ClaimableUnit unit = session.unitOf(request.testId());
     HistoryKey key = unit.historyKey();
     if (unit.invocation() == null) {
-      if (!request.outcome().measuredWork()) {
-        return;
+      // The method-level median stays a passing measurement: a plain test that aborts in
+      // no time would otherwise record itself as fast and be ordered as such the run its
+      // assumption starts holding.
+      if (request.outcome() == Outcome.PASSED) {
+        durations.recordMeasured(key, sessionId, request.durationMs(), request.firstOnShard());
       }
-      durations.recordMeasured(key, sessionId, request.durationMs(), request.firstOnShard());
-      if (request.invocations() == null || request.invocations().isEmpty()) {
+      if (!DurationStore.carriesRows(request.outcome())
+          || request.invocations() == null
+          || request.invocations().isEmpty()) {
         return;
       }
       boolean everyRowUsable = true;
       for (InvocationRecord row : request.invocations()) {
         Integer position = positionOfRecordId(row.testId());
-        if (position == null) {
+        OptionalLong duration = DurationStore.rowDuration(row.outcome(), row.durationMs());
+        if (position == null || duration.isEmpty()) {
           everyRowUsable = false;
           continue;
         }
-        long rowDuration = row.outcome() == Outcome.SKIPPED ? 0 : row.durationMs();
-        durations.recordInvocation(key, sessionId, position, rowDuration);
+        durations.recordInvocation(key, sessionId, position, duration.getAsLong());
       }
       if (everyRowUsable) {
         durations.markInvocationsComplete(key, sessionId);
@@ -122,11 +117,10 @@ final class InvocationDistribution {
       return;
     }
     String censusId = unit.censusId();
-    // A probe that materialised is proof the set grew past the plan, whatever its outcome
-    // and whichever shard ran it -- a truly nonexistent position produces no result at all,
-    // only a vanished NACK. Chained before any outcome gate on purpose: an ABORTED probe
-    // absorbs green, and gating the walk on PASSED would halt discovery there, leaving
-    // every row past it silently unrun in every session.
+    // A probe that materialised is proof the set grew, whatever its outcome -- a truly
+    // nonexistent position produces no result at all, only a vanished NACK. Chained before
+    // any outcome gate on purpose: gating the walk would halt discovery here, leaving every
+    // row past it silently unrun in every session.
     if (unit.probe()) {
       int next = unit.invocation() + 1;
       boolean added =
@@ -140,12 +134,12 @@ final class InvocationDistribution {
             next);
       }
     }
-    if (request.outcome() == Outcome.FAILED) {
+    OptionalLong duration = DurationStore.rowDuration(request.outcome(), request.durationMs());
+    if (duration.isEmpty()) {
       return;
     }
-    long duration = request.outcome() == Outcome.SKIPPED ? 0 : request.durationMs();
-    durations.recordInvocation(key, sessionId, unit.invocation(), duration);
-    if (session.measuredUnitsAllNonFailing(censusId)) {
+    durations.recordInvocation(key, sessionId, unit.invocation(), duration.getAsLong());
+    if (session.measuredUnitsAllAbsorbed(censusId)) {
       durations.markInvocationsComplete(key, sessionId);
     }
   }

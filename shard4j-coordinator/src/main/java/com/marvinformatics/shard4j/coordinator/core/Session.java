@@ -229,8 +229,8 @@ final class Session {
     }
   }
 
-  /** True when every measured (non-probe) unit of the method absorbed without failing. */
-  boolean measuredUnitsAllNonFailing(String censusId) {
+  /** True when every measured (non-probe) unit of the method has reached an absorbing state. */
+  boolean measuredUnitsAllAbsorbed(String censusId) {
     return unitsByCensusId.getOrDefault(censusId, List.of()).stream()
         .map(units::get)
         .filter(unit -> !unit.unit.probe())

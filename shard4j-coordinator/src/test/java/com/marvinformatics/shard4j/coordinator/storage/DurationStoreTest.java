@@ -178,6 +178,42 @@ class DurationStoreTest {
   }
 
   @Test
+  void coldLoadRebuildsAnAbortedTemplatesBreakdownAsComplete() {
+    String template =
+        "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
+            + "/[test-template:rows(java.lang.String)]";
+    HistoryKey key = new HistoryKey("com.example.orders.OrderIT#rows(java.lang.String)");
+    DurationStore store = store();
+    // A fold that rebuilt no plan here would un-distribute the method at the next restart.
+    store.coldLoad(
+        List.of(
+            unitRow(template, Outcome.ABORTED, 90),
+            invocationRow(template + "/[test-template-invocation:#1]", Outcome.PASSED, 40),
+            invocationRow(template + "/[test-template-invocation:#2]", Outcome.ABORTED, 0),
+            invocationRow(template + "/[test-template-invocation:#3]", Outcome.PASSED, 50)));
+    assertThat(store.invocationPlan(key)).containsExactly(1, 2, 3);
+    assertThat(store.estimate(key)).hasValue(90L);
+  }
+
+  @Test
+  void coldLoadOfATemplateWithAFailedRowRebuildsNoPlan() {
+    String template =
+        "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"
+            + "/[test-template:rows(java.lang.String)]";
+    HistoryKey key = new HistoryKey("com.example.orders.OrderIT#rows(java.lang.String)");
+    DurationStore store = store();
+    // Distrust the breakdown; dropping just that position loses the row for good.
+    store.coldLoad(
+        List.of(
+            unitRow(template, Outcome.PASSED, 90),
+            invocationRow(template + "/[test-template-invocation:#1]", Outcome.PASSED, 40),
+            invocationRow(template + "/[test-template-invocation:#2]", Outcome.FAILED, 3),
+            invocationRow(template + "/[test-template-invocation:#3]", Outcome.PASSED, 50)));
+    assertThat(store.invocationPlan(key)).isEmpty();
+    assertThat(store.invocationEstimate(key, 2)).isEmpty();
+  }
+
+  @Test
   void coldLoadOfADistributedSessionKeepsDurationsButTrustsNoPlan() {
     String template =
         "[engine:junit-jupiter]/[class:com.example.orders.OrderIT]"

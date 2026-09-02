@@ -30,16 +30,11 @@ particular ends up on every consumer's test classpath. Raising it to 21 or 25 wo
 adoption of a test-sharding library on a JDK the adopting project may not run yet -- the
 cost lands on the consumer, not on us, which is exactly the wrong place for it.
 
-**17 is our floor, not an inherited one, and the docs used to claim otherwise.** Both of
-the things the engine plugs into target Java 8: JUnit Platform 1.14 and Jupiter 5.14 ship
-class file major 52 with `Require-Capability: osgi.ee=JavaSE version=1.8` (it is JUnit
-6.x / Platform 6.x that moves to 17), and `maven-surefire-plugin` / `maven-failsafe-plugin`
-3.5.x build at `javaVersion=8`. What actually holds the engine at 17 is its own source:
-39 records across `shard4j-protocol` and `shard4j-engine`, plus a handful of switch
-expressions. Lowering the floor is therefore possible and purely mechanical, and it is the
-only thing standing between a consumer still on 11 and this library -- but it is a
-deliberate rewrite of both published modules, not a property change. Do not restore the
-JUnit-floor claim to justify staying at 17; if 17 is kept, keep it for the reason above.
+**17 is our floor, not an inherited one.** Both things the engine plugs into target Java 8:
+JUnit Platform 1.14 and Jupiter 5.14 ship class file major 52 (Platform 6.x is where that
+moves to 17), and surefire/failsafe 3.5.x build at `javaVersion=8`. What holds the engine
+at 17 is its own source -- records and switch expressions throughout both published
+modules -- so lowering it is mechanical but is a deliberate rewrite, not a property change.
 
 The coordinator is a **deployed service**: it is nobody's dependency, its runtime is chosen
 by whoever deploys it, and it is free to sit on the current LTS.
