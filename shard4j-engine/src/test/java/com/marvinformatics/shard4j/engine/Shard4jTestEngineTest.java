@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.ServiceLoader;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.Test;
+import org.junit.platform.engine.CancellationToken;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.TestDescriptor;
@@ -103,7 +104,8 @@ class Shard4jTestEngineTest {
             listener,
             request.getConfigurationParameters(),
             EngineTestHarness.outerRequest(listener).getOutputDirectoryCreator(),
-            EngineTestHarness.outerRequest(listener).getStore()));
+            EngineTestHarness.outerRequest(listener).getStore(),
+            CancellationToken.disabled()));
 
     assertThat(finished).containsExactly(target);
   }
