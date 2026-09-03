@@ -234,6 +234,11 @@
                     <include>org.junit.platform:junit-platform-commons</include>
                     <include>org.apiguardian:apiguardian-api</include>
                     <include>org.opentest4j:opentest4j</include>
+                    <!-- Arrived with JUnit Platform 6: junit-platform-commons compiles
+                         against jspecify's nullability annotations. Annotations only, no
+                         runtime code, and it is on every Platform 6 consumer's classpath
+                         already by virtue of using JUnit. -->
+                    <include>org.jspecify:jspecify</include>
                     <include>io.github.openfeign:feign-core</include>
                     <include>io.github.openfeign:feign-jackson</include>
                     <include>com.fasterxml.jackson.core:jackson-databind</include>

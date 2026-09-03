@@ -87,6 +87,7 @@ output-directory accessors binary-incompatibly in three consecutive minors --
 | 1.12 | `create(descriptor, listener, config, OutputDirectoryProvider)` |
 | 1.13 | `create(descriptor, listener, config, OutputDirectoryProvider, store)` |
 | 1.14 | `create(descriptor, listener, config, OutputDirectoryCreator, store)` |
+| 6.x | `create(descriptor, listener, config, OutputDirectoryCreator, store, CancellationToken)` |
 
 -- so no single compiled artifact spans them. A mismatch surfaces as JUnit's own
 `OutputDirectoryProvider not available` / `OutputDirectoryCreator not available`
@@ -97,6 +98,9 @@ path."*. The Platform
 assumes engine and launcher move together; shard4j is an engine, so it inherits that
 assumption.
 
+**This release targets Platform 6.** Consumers still on JUnit 5 need shard4j 0.4.0 or
+earlier; there is no artifact that spans both, and there will not be one.
+
 Consumers on a framework BOM (Quarkus, Spring Boot) frequently resolve an older Platform
 than the one shard4j targets, and the framework BOM wins unless told otherwise. Import
 `junit-bom` **ahead of** the framework BOM in `<dependencyManagement>`:
@@ -105,13 +109,13 @@ than the one shard4j targets, and the framework BOM wins unless told otherwise. 
 <dependency>
   <groupId>org.junit</groupId>
   <artifactId>junit-bom</artifactId>
-  <version>5.14.4</version>
+  <version>6.1.3</version>
   <type>pom</type>
   <scope>import</scope>
 </dependency>
 ```
 
-Any `5.14.x` works -- only the **minor** has to match, and patch bumps within it keep the
+Any `6.1.x` works -- only the **minor** has to match, and patch bumps within it keep the
 API shape (which is why dependabot still lets those through). Check `pom.xml` for the
 version this release actually builds against.
 

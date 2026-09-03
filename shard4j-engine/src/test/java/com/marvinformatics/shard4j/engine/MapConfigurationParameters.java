@@ -19,11 +19,6 @@ record MapConfigurationParameters(Map<String, String> values) implements Configu
   }
 
   @Override
-  public int size() {
-    return values.size();
-  }
-
-  @Override
   public Set<String> keySet() {
     return values.keySet();
   }

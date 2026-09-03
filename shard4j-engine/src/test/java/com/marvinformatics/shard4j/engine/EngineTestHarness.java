@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.engine;
 import java.nio.file.Path;
 import java.util.Map;
 import lombok.experimental.UtilityClass;
+import org.junit.platform.engine.CancellationToken;
 import org.junit.platform.engine.EngineExecutionListener;
 import org.junit.platform.engine.ExecutionRequest;
 import org.junit.platform.engine.OutputDirectoryCreator;
@@ -23,7 +24,8 @@ class EngineTestHarness {
         new MapConfigurationParameters(Map.of()),
         outputDirectoryCreator(),
         new NamespacedHierarchicalStore<>(
-            new NamespacedHierarchicalStore<Namespace>(null)));
+            new NamespacedHierarchicalStore<Namespace>(null)),
+        CancellationToken.disabled());
   }
 
   OutputDirectoryCreator outputDirectoryCreator() {
