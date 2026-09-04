@@ -80,6 +80,7 @@ public class Shard4jTestEngine implements TestEngine {
     listener.executionStarted(root);
     try {
       if (root instanceof Shard4jEngineDescriptor descriptor && !root.getChildren().isEmpty()) {
+        CompatibilityMatrix.check();
         JupiterDelegate jupiter = new JupiterDelegate(root.getUniqueId());
         switch (descriptor.mode()) {
           case DIRECT -> runDirect(descriptor, jupiter, request);

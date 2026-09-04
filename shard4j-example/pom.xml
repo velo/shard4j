@@ -89,12 +89,27 @@
         <configuration>
           <!-- No <includes> block, ever. It replaces failsafe's defaults, and a
                plausible one-line addition here silently drops the whole
-               default-matching suite and goes green having run nothing. Tag exclusion
-               is the safe filter: the sharding fixtures run only through the harness,
-               and a coordinated census inherits this exclusion rather than deadlocking
-               on units it would never be handed. -->
+               default-matching suite and goes green having run nothing.
+
+               File-pattern <excludes>, not <excludedGroups>: surefire/failsafe 3.6.0
+               parses <excludedGroups> but never builds the tag filter from it, so a
+               fixture tagged shard4j-fixture runs and fails the default build instead
+               of staying out of it (confirmed by comparing against 3.5.6 with the same
+               pom). <excludes> is a different, unaffected mojo code path, at the cost
+               of listing fixtures twice (here and in the coordinated profile below): a
+               new one must be added to both, and @Tag("shard4j-fixture") stays on each
+               class as documentation excludedGroups can no longer enforce. -->
           <rerunFailingTestsCount>0</rerunFailingTestsCount>
-          <excludedGroups>shard4j-fixture</excludedGroups>
+          <excludes>
+            <exclude>**/AlwaysFailsIT.java</exclude>
+            <exclude>**/CatalogSearchIT.java</exclude>
+            <exclude>**/CheckoutSetupIT.java</exclude>
+            <exclude>**/FlakyGatewayIT.java</exclude>
+            <exclude>**/InventoryAuditIT.java</exclude>
+            <exclude>**/MediumRoastIT.java</exclude>
+            <exclude>**/QuickShotIT.java</exclude>
+            <exclude>**/SlowBrewIT.java</exclude>
+          </excludes>
           <environmentVariables>
             <SHARD_COORDINATOR_SECRET>local-integration-only</SHARD_COORDINATOR_SECRET>
           </environmentVariables>
@@ -180,8 +195,22 @@
               <skipAfterFailureCount>0</skipAfterFailureCount>
               <!-- The census inherits this filter, so what a shard is never handed is
                    never registered either. The harness tests drive their own launcher
-                   sessions and stay out of a coordinated run. -->
-              <excludedGroups>shard4j-fixture,shard4j-harness</excludedGroups>
+                   sessions and stay out of a coordinated run. File-pattern <excludes>,
+                   not <excludedGroups> (see the default execution's block above for
+                   why); the same fixture list plus the shard4j-harness classes. -->
+              <excludes>
+                <exclude>**/AlwaysFailsIT.java</exclude>
+                <exclude>**/CatalogSearchIT.java</exclude>
+                <exclude>**/CheckoutSetupIT.java</exclude>
+                <exclude>**/FlakyGatewayIT.java</exclude>
+                <exclude>**/InventoryAuditIT.java</exclude>
+                <exclude>**/MediumRoastIT.java</exclude>
+                <exclude>**/QuickShotIT.java</exclude>
+                <exclude>**/SlowBrewIT.java</exclude>
+                <exclude>**/CoordinatedShardingE2EIT.java</exclude>
+                <exclude>**/InertEngineIT.java</exclude>
+                <exclude>**/OrderingAndRetryE2EIT.java</exclude>
+              </excludes>
             </configuration>
             <executions>
               <!-- The default single execution belongs to the uncoordinated build. -->

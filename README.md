@@ -125,6 +125,76 @@ declares `<versions.junit5>5.12.2</versions.junit5>`, older than either version 
 What surefire does do is align `junit-platform-launcher` to whatever Platform it finds on
 the test classpath, which is why fixing the test classpath fixes the whole run.
 
+### Build-tool compatibility matrix
+
+The Platform floors above are one axis; the *build tool* that forks each shard's JVM is
+the other, and it has broken this reactor's own tests at least once. Each shard4j release
+is built and its own test suite run against exactly one JUnit Platform minor and one
+surefire/failsafe version:
+
+| shard4j | JUnit Platform | surefire/failsafe |
+|---|---|---|
+| 0.1.0 | 1.13.4 | 3.5.4 |
+| 0.2.0 -- 0.4.0 | 1.14.4 | 3.5.6 |
+| 0.5.0 | 6.1.3 | 3.5.6 |
+| 0.6.0 | 6.1.3 | 3.6.0 |
+
+0.6.0 raises the surefire/failsafe floor to 3.6.0 deliberately, not as a courtesy bump.
+Testing the jump surfaced two breakages, both confirmed by running the identical suite
+against 3.5.6 and 3.6.0 back to back:
+
+- **A test-harness engine leak.** 3.6.0 puts `junit-vintage-engine` on a fork's classpath
+  where 3.5.x did not, even though nothing in the reactor declares it as a dependency. The
+  example module's own acceptance harness built its launcher session with
+  `EngineFilter.excludeEngines("junit-jupiter")`, so the newly-visible vintage engine ran
+  alongside shard4j's, and its trivially-successful root event fired after shard4j's own
+  `FAILED` one and clobbered it. Fixed by filtering to `includeEngines(Shard4jTestEngine.ENGINE_ID)`
+  instead -- immune to whatever else a future surefire version puts on the classpath.
+- **A broken `<excludedGroups>` translation.** The example module tags fixtures it never
+  wants failsafe to pick up directly (`@Tag("shard4j-fixture")`) and excludes that group in
+  its plugin config. Under 3.6.0 the mojo still parses `<excludedGroups>`, but the tagged
+  classes ran anyway -- the translation into a JUnit Platform tag filter appears to be
+  broken in this version. Worked around with file-pattern `<excludes>` instead, a different
+  and unaffected mojo code path, at the cost of listing each fixture by name in two places.
+
+Neither breakage lives in `Shard4jTestEngine` itself -- both are in the example module's
+own test scaffolding and build configuration -- but they are exactly the class of failure a
+consumer bumping surefire/failsafe would also hit, silently, with no engine-level signal.
+That is what the runtime check below is for.
+
+**The engine checks this for itself, once per fork, before doing any real work.**
+`compatibility.json`, shipped inside the `shard4j-engine` jar, lists each tracked
+build-tool artifact with the version range this exact release has actually run its own
+tests against. At the top of `execute()`, before touching the coordinator, the engine
+detects what actually forked this JVM and compares:
+
+- **Below the range's floor** is a hard `ShardConfigurationException`, naming the artifact
+  and both versions -- the same loud-failure convention as every other configuration
+  error this engine raises, never a silent fall-through to running everything anyway.
+- **Above the range's ceiling** is a `WARNING`-level log banner, not a failure: a newer
+  version may well work, nobody has verified it yet, and an untested-but-plausibly-fine
+  version must never break a consumer's build on its own.
+- **Undetectable** (Gradle, an IDE runner, `forkCount=0`, or any environment that does not
+  fork this JVM through a Maven surefire/failsafe booter) is silence, not a warning --
+  consistent with the engine staying inert everywhere else it cannot see enough to act.
+
+Detection is a classpath probe, not a compile-time dependency: `shard4j-engine` does not
+depend on surefire or failsafe. surefire/failsafe versions are read from
+`META-INF/maven/org.apache.maven.surefire/surefire-booter/pom.properties` -- present in
+any jar Maven's own jar plugin built, and `surefire-booter` is the fork's own entry point
+(`ForkedBooter`), shared by surefire and failsafe since they release from one version.
+JUnit Platform, built by Gradle and so never carrying a `pom.properties`, is read instead
+from `Package.getImplementationVersion()` on a Platform class already on the classpath.
+
+The range's two ends are maintained differently, on purpose. `firstTested` -- the floor --
+is a hand-edited, deliberate decision: it moves only when a release intentionally drops
+support for older versions, the same way the Platform floor above has moved twice.
+`lastTested` -- the ceiling -- is filled in by Maven resource filtering from this reactor's
+own `maven-surefire-plugin.version` and `junit.bom.version` properties at build time, so it
+always names exactly what this release's CI forked its tests under. A dependabot bump that
+leaves CI red never reaches a release to make that claim; one that goes green raises the
+ceiling for free, with nothing to remember to edit by hand.
+
 Configuration is read from JUnit configuration parameters (which the launcher backs with
 system properties) first, then environment variables (`shard.foo.bar` maps to
 `SHARD_FOO_BAR`):

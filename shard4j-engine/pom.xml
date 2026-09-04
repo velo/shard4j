@@ -118,6 +118,28 @@
   </dependencies>
 
   <build>
+    <resources>
+      <!-- Unfiltered by default: binary-adjacent resources like META-INF/services must
+           pass through byte-for-byte. compatibility.json alone is filtered so its
+           lastTested fields resolve to whatever surefire/failsafe and JUnit Platform
+           versions this reactor is actually pinned to build with (one property bump
+           updates the pom and the shipped compatibility claim together), and a
+           dependabot bump that leaves CI red never reaches a release to make that
+           claim in the first place. -->
+      <resource>
+        <directory>src/main/resources</directory>
+        <excludes>
+          <exclude>shard4j/compatibility.json</exclude>
+        </excludes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <includes>
+          <include>shard4j/compatibility.json</include>
+        </includes>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
     <plugins>
       <!-- JDK 23+ no longer runs classpath annotation processors implicitly, so
            Lombok must be named here to run at all. -->
