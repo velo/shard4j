@@ -1,4 +1,4 @@
-package com.example.orders.fixtures;
+package com.example.orders;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * exhausted budget still ends FAILED instead of quietly draining into a green session.
  */
 @Tag("shard4j-fixture")
-public class AlwaysFailsIT {
+class AlwaysFailsIT {
 
   @Test
   void neverPasses() {

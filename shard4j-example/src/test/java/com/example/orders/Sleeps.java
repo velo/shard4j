@@ -1,4 +1,4 @@
-package com.example.orders.fixtures;
+package com.example.orders;
 
 /** Deliberate, interruption-safe delay, so the ordering fixtures cost measurably different time. */
 final class Sleeps {

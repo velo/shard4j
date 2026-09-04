@@ -1,10 +1,7 @@
-package com.example.orders.harness;
+package com.example.orders;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.example.orders.PingResourceIT;
-import com.example.orders.fixtures.CatalogSearchIT;
-import com.example.orders.fixtures.InventoryAuditIT;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Tag;
@@ -24,7 +21,7 @@ import org.junit.platform.launcher.core.LauncherFactory;
  * "inert" engine would run everything twice; a claiming one would need a coordinator.
  */
 @Tag("shard4j-harness")
-public class InertEngineIT {
+class InertEngineIT {
 
   @Test
   void givenBothEnginesAndNoShardConfiguration_whenTheSuiteRuns_thenEveryTestRunsExactlyOnce() {

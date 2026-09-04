@@ -73,13 +73,15 @@
         <artifactId>maven-failsafe-plugin</artifactId>
         <configuration>
           <!-- No <includes> block, ever: it replaces failsafe's defaults and could
-               silently drop the whole suite. <excludes> by package, not
-               <excludedGroups>: surefire/failsafe 3.6.0 parses <excludedGroups> but
-               never builds the tag filter from it (confirmed against 3.5.6). -->
+               silently drop the whole suite. <excludesFile>, not <excludedGroups>:
+               surefire/failsafe 3.6.0 parses <excludedGroups> but never builds the
+               tag filter from it (confirmed against 3.5.6). Excludes only the two
+               fixtures with no standalone verdict: AlwaysFailsIT is meant to fail,
+               and FlakyGatewayIT's counter is real-fork-unsafe (see its own doc).
+               Every other fixture also runs for real here, not just through the
+               harness. -->
           <rerunFailingTestsCount>0</rerunFailingTestsCount>
-          <excludes>
-            <exclude>**/fixtures/**</exclude>
-          </excludes>
+          <excludesFile>${project.basedir}/src/test/resources/shard4j-fixtures.excludes</excludesFile>
           <environmentVariables>
             <SHARD_COORDINATOR_SECRET>local-integration-only</SHARD_COORDINATOR_SECRET>
           </environmentVariables>
@@ -165,10 +167,13 @@
               <skipAfterFailureCount>0</skipAfterFailureCount>
               <!-- The census inherits this filter: what a shard is never handed is
                    never registered. The harness tests drive their own launcher
-                   sessions and stay out of a coordinated run. -->
+                   sessions and stay out of a coordinated run: the shared fixture
+                   list above, plus the harness classes themselves. -->
+              <excludesFile>${project.basedir}/src/test/resources/shard4j-fixtures.excludes</excludesFile>
               <excludes>
-                <exclude>**/fixtures/**</exclude>
-                <exclude>**/harness/**</exclude>
+                <exclude>**/CoordinatedShardingE2EIT.java</exclude>
+                <exclude>**/InertEngineIT.java</exclude>
+                <exclude>**/OrderingAndRetryE2EIT.java</exclude>
               </excludes>
             </configuration>
             <executions>

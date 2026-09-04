@@ -1,4 +1,4 @@
-package com.example.orders.fixtures;
+package com.example.orders;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * ever emitted for either test below -- the harness asserts both still reach ABORTED.
  */
 @Tag("shard4j-fixture")
-public class CheckoutSetupIT {
+class CheckoutSetupIT {
 
   @BeforeAll
   static void requiresPaymentSandbox() {
