@@ -1,0 +1,60 @@
+name: release
+
+# Triggered by creating a GitHub Release (tag name vX.Y.Z), not by pushing a tag: the
+# release event carries the tag name into github.event.release.tag_name, which is
+# what sets the Maven version below. build.yml already validates the tagged commit
+# on its own "tags: v*" trigger; this workflow only needs to publish it.
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up JDKs
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            25
+          cache: maven
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "default-key $(gpg --list-keys --with-colons | grep pub | cut -d':' -f5)" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+
+      - name: Generate settings.xml
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings>
+                  <servers>
+                    ${{ secrets.MAVEN_SETTINGS_SERVER_CENTRAL }}
+                  </servers>
+                </settings>" > ~/.m2/settings.xml
+
+      # The release commit already carries this exact version (see AGENTS.md's release
+      # process), so this is a consistency check, not the source of truth: if a release
+      # is ever cut from a tag whose pom disagrees, this makes the two versions agree
+      # rather than silently publishing whichever the pom happened to say.
+      - name: Set the release version from the tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          mvn -B org.codehaus.mojo:versions-maven-plugin:2.19.1:set \
+            -DnewVersion="${TAG#v}" -DprocessAllModules=true -DgenerateBackupPoms=false
+
+      - name: Build, sign, and publish to Central
+        run: mvn -B clean deploy -Prelease
