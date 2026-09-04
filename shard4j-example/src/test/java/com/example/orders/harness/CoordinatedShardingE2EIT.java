@@ -1,8 +1,13 @@
-package com.example.orders;
+package com.example.orders.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 
+import com.example.orders.PingResourceIT;
+import com.example.orders.fixtures.CatalogSearchIT;
+import com.example.orders.fixtures.CheckoutSetupIT;
+import com.example.orders.fixtures.FlakyGatewayIT;
+import com.example.orders.fixtures.InventoryAuditIT;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
@@ -26,7 +31,7 @@ import org.testcontainers.containers.GenericContainer;
  * reported, barrier honoured, and the coverage verdict satisfiable from the read surface.
  */
 @Tag("shard4j-harness")
-class CoordinatedShardingE2EIT {
+public class CoordinatedShardingE2EIT {
 
   private static final List<Class<?>> SUITE =
       List.of(

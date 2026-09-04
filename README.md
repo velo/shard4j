@@ -115,9 +115,12 @@ than the one shard4j targets, and the framework BOM wins unless told otherwise. 
 </dependency>
 ```
 
-Any `6.1.x` works -- only the **minor** has to match, and patch bumps within it keep the
-API shape (which is why dependabot still lets those through). Check `pom.xml` for the
-version this release actually builds against.
+Match the exact patch in `pom.xml`. Contrary to an earlier assumption here, patch bumps
+within 6.1.x are not proven safe: 6.1.0 and 6.1.2 both fail this reactor's own test suite
+the same way 6.0.0 does, and only 6.1.3 passes -- confirmed by testing each directly.
+Dependabot still moves patches through on its own (see `compatibility.json`'s
+`junit-platform-*` entries, which is what actually enforces the tested version at
+runtime); a bump that breaks CI simply never reaches a release.
 
 Surefire cannot settle this for you. `surefire-junit-platform` is a *plugin*-classpath
 artifact and manages nothing on the test classpath; it also lags -- surefire 3.5.6
@@ -183,8 +186,15 @@ depend on surefire or failsafe. surefire/failsafe versions are read from
 `META-INF/maven/org.apache.maven.surefire/surefire-booter/pom.properties` -- present in
 any jar Maven's own jar plugin built, and `surefire-booter` is the fork's own entry point
 (`ForkedBooter`), shared by surefire and failsafe since they release from one version.
-JUnit Platform, built by Gradle and so never carrying a `pom.properties`, is read instead
-from `Package.getImplementationVersion()` on a Platform class already on the classpath.
+JUnit artifacts, built by Gradle and so never carrying a `pom.properties`, are read instead
+from `Package.getImplementationVersion()` on a class each artifact actually ships.
+
+`junit-platform-engine`, `junit-platform-launcher` and `junit-jupiter-engine` are three
+separate catalog entries, not one -- on purpose. They are three jars a consumer's own
+dependency management can skew independently (a framework BOM overriding one and not the
+others is exactly the failure mode the *JUnit Platform version alignment* section above
+describes), so a single "JUnit Platform" version string would hide the one case this check
+exists to catch: three artifacts that individually look fine but disagree with each other.
 
 The range's two ends are maintained differently, on purpose. `firstTested` -- the floor --
 is a hand-edited, deliberate decision: it moves only when a release intentionally drops

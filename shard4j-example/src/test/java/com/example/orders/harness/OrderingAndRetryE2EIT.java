@@ -1,7 +1,14 @@
-package com.example.orders;
+package com.example.orders.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.example.orders.fixtures.AlwaysFailsIT;
+import com.example.orders.fixtures.CatalogSearchIT;
+import com.example.orders.fixtures.FlakyGatewayIT;
+import com.example.orders.fixtures.InventoryAuditIT;
+import com.example.orders.fixtures.MediumRoastIT;
+import com.example.orders.fixtures.QuickShotIT;
+import com.example.orders.fixtures.SlowBrewIT;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
@@ -26,7 +33,7 @@ import org.testcontainers.containers.GenericContainer;
  * record durations and then a second one to observe the order they produce.
  */
 @Tag("shard4j-harness")
-class OrderingAndRetryE2EIT {
+public class OrderingAndRetryE2EIT {
 
   private static GenericContainer<?> coordinator;
   private static String url;

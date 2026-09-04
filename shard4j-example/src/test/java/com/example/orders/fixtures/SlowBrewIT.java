@@ -1,4 +1,4 @@
-package com.example.orders;
+package com.example.orders.fixtures;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
  * test that cannot observe the ordering cannot catch it regressing.
  */
 @Tag("shard4j-fixture")
-class SlowBrewIT {
+public class SlowBrewIT {
 
   @Test
   void steeps() {

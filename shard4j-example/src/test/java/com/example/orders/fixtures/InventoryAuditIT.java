@@ -1,4 +1,4 @@
-package com.example.orders;
+package com.example.orders.fixtures;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * module's own failsafe run. Nothing here knows shard4j exists.
  */
 @Tag("shard4j-fixture")
-class InventoryAuditIT {
+public class InventoryAuditIT {
 
   @Test
   void countsStock() {

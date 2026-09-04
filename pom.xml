@@ -6,7 +6,7 @@
 
   <groupId>com.marvinformatics</groupId>
   <artifactId>shard4j</artifactId>
-  <version>0.5.1-SNAPSHOT</version>
+  <version>0.6.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>shard4j</name>
@@ -66,8 +66,10 @@
     <jackson.version>2.22.2</jackson.version>
     <spring-boot.version>4.1.1</spring-boot.version>
     <assertj.version>3.27.7</assertj.version>
+    <testcontainers.version>1.21.4</testcontainers.version>
 
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+    <maven-toolchains-plugin.version>3.3.0</maven-toolchains-plugin.version>
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
     <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
@@ -99,6 +101,60 @@
         <artifactId>shard4j-engine</artifactId>
         <version>${project.version}</version>
       </dependency>
+
+      <!-- BOM imports, one place. Order matters: feign-bom/jackson-bom ahead of
+           spring-boot-dependencies keeps Jackson at the version tested here, not
+           whatever Spring Boot bundles. -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.github.openfeign</groupId>
+        <artifactId>feign-bom</artifactId>
+        <version>${feign.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Individually managed versions, not covered by a BOM above. -->
+      <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-core</artifactId>
+        <version>${assertj.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers</artifactId>
+        <version>${testcontainers.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${testcontainers.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.projectlombok</groupId>
+        <artifactId>lombok</artifactId>
+        <version>${lombok.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -126,11 +182,21 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${maven-surefire-plugin.version}</version>
+          <configuration>
+            <jdkToolchain>
+              <version>${maven.compiler.release}</version>
+            </jdkToolchain>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-failsafe-plugin</artifactId>
           <version>${maven-failsafe-plugin.version}</version>
+          <configuration>
+            <jdkToolchain>
+              <version>${maven.compiler.release}</version>
+            </jdkToolchain>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -378,6 +444,42 @@
             <artifactId>central-publishing-maven-plugin</artifactId>
             <extensions>true</extensions>
             <inherited>false</inherited>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!-- Compiles and forks tests under an actual JDK matching maven.compiler.release
+         (17, or 25 for the coordinator), not merely a release-flag target under
+         whatever JDK invoked Maven. Requires that version in ~/.m2/toolchains.xml;
+         skip with -Dtoolchain.skip on a machine without one. -->
+    <profile>
+      <id>toolchain</id>
+      <activation>
+        <property>
+          <name>!toolchain.skip</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-toolchains-plugin</artifactId>
+            <version>${maven-toolchains-plugin.version}</version>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>toolchain</goal>
+                </goals>
+                <configuration>
+                  <toolchains>
+                    <jdk>
+                      <version>${maven.compiler.release}</version>
+                    </jdk>
+                  </toolchains>
+                </configuration>
+              </execution>
+            </executions>
           </plugin>
         </plugins>
       </build>

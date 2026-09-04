@@ -1,4 +1,4 @@
-package com.example.orders;
+package com.example.orders.fixtures;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -11,7 +11,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * exist at discovery -- while each row still executes and is recorded individually.
  */
 @Tag("shard4j-fixture")
-class CatalogSearchIT {
+public class CatalogSearchIT {
 
   @ParameterizedTest
   @ValueSource(strings = {"mug", "shirt", "sticker"})

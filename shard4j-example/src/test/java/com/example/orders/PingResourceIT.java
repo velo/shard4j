@@ -10,7 +10,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Ordinary tests in an ordinary project. Nothing here extends a base class, carries an
  * annotation, or knows that shard4j exists -- which is the assertion this module makes.
  */
-class PingResourceIT {
+public class PingResourceIT {
 
   @Test
   void hello() {

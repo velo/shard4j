@@ -25,7 +25,9 @@ jobs:
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: |
+            17
+            25
           cache: maven
 
       # Also runs the enforced module boundary: the engine may resolve no coordinator
@@ -46,7 +48,9 @@ jobs:
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: |
+            17
+            25
           cache: maven
 
       - name: Build and install the reactor
@@ -111,7 +115,9 @@ jobs:
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: |
+            17
+            25
           cache: maven
 
       - name: Build the coordinator app jar

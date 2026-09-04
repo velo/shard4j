@@ -14,10 +14,14 @@ class CompatibilityMatrixTest {
           null, "3.6.0", "3.6.0");
 
   @Test
-  void givenTheShippedCatalog_whenReadingIt_thenBothEntriesFromReadmeArePresent() {
+  void givenTheShippedCatalog_whenReadingIt_thenEveryEntryFromReadmeIsPresent() {
     assertThat(CompatibilityMatrix.catalog())
         .extracting(CompatibilityMatrix.Entry::id)
-        .containsExactlyInAnyOrder("surefire/failsafe", "junit-platform");
+        .containsExactlyInAnyOrder(
+            "surefire/failsafe",
+            "junit-platform-engine",
+            "junit-platform-launcher",
+            "junit-jupiter-engine");
   }
 
   @Test
@@ -82,7 +86,7 @@ class CompatibilityMatrixTest {
   void givenARangeWiderThanOnePoint_whenTheDetectedVersionFallsInsideIt_thenStaysInert() {
     var ranged =
         new CompatibilityMatrix.Entry(
-            "junit-platform",
+            "junit-platform-engine",
             "package-version",
             null,
             "org.junit.platform.engine.TestEngine",
@@ -105,10 +109,38 @@ class CompatibilityMatrixTest {
   void givenAPackageVersionProbe_whenDetectingFromThisRealClasspath_thenFindsJUnitPlatform() {
     var entry =
         new CompatibilityMatrix.Entry(
-            "junit-platform",
+            "junit-platform-engine",
             "package-version",
             null,
             "org.junit.platform.engine.TestEngine",
+            "0.0.0",
+            "999.0.0");
+    assertThat(CompatibilityMatrix.detect(entry)).isNotNull();
+  }
+
+  @Test
+  void givenAPackageVersionProbe_whenDetectingTheLauncher_thenFindsItOnThisRealClasspath() {
+    // The launcher is provided-scope on shard4j-engine, never a compile-time reference
+    // this class makes itself -- this pins that reflection alone still finds it.
+    var entry =
+        new CompatibilityMatrix.Entry(
+            "junit-platform-launcher",
+            "package-version",
+            null,
+            "org.junit.platform.launcher.Launcher",
+            "0.0.0",
+            "999.0.0");
+    assertThat(CompatibilityMatrix.detect(entry)).isNotNull();
+  }
+
+  @Test
+  void givenAPackageVersionProbe_whenDetectingJupiter_thenFindsItOnThisRealClasspath() {
+    var entry =
+        new CompatibilityMatrix.Entry(
+            "junit-jupiter-engine",
+            "package-version",
+            null,
+            "org.junit.jupiter.engine.JupiterTestEngine",
             "0.0.0",
             "999.0.0");
     assertThat(CompatibilityMatrix.detect(entry)).isNotNull();

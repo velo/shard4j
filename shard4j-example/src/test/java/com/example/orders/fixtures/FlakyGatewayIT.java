@@ -1,4 +1,4 @@
-package com.example.orders;
+package com.example.orders.fixtures;
 
 import static org.assertj.core.api.Assertions.fail;
 
@@ -18,12 +18,12 @@ import org.junit.jupiter.api.Test;
  * this fixture must call {@link #resetAttempts()} in its own setup.
  */
 @Tag("shard4j-fixture")
-class FlakyGatewayIT {
+public class FlakyGatewayIT {
 
   private static final AtomicInteger ATTEMPTS = new AtomicInteger();
 
   /** Re-arms the fixture so the next execution fails once more. */
-  static void resetAttempts() {
+  public static void resetAttempts() {
     ATTEMPTS.set(0);
   }
 

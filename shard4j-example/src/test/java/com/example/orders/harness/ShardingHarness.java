@@ -1,4 +1,4 @@
-package com.example.orders;
+package com.example.orders.harness;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -33,17 +33,10 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 
 /**
- * Simulates what failsafe's coordinated profile does -- hand the suite to the shard4j
- * engine alone, with per-shard configuration -- through the launcher, in process, against
- * the real coordinator jar running in a real container. Engines are included by id rather
- * than excluded by name: surefire 3.6.0+ puts junit-vintage-engine on this forked JVM's
- * classpath, where it is ServiceLoader-visible to this harness's own launcher even though
- * no dependency declares it, and an exclude list naming only junit-jupiter let it run as a
- * second, always-successful root whose event clobbers the FAILED one callers assert on.
- * Three shards are three launcher sessions, and each is one execution, exactly as the
- * profile's single failsafe execution block runs it: retries happen inside a shard's own
- * loop, so a second session for the same shard would be simulating a configuration nobody
- * declares.
+ * Simulates failsafe's coordinated profile -- hand the suite to the shard4j engine alone,
+ * per shard -- through the launcher, in process, against the real coordinator jar. Engines
+ * are included by id, not excluded by name: surefire 3.6.0+ puts an extra engine on this
+ * classpath that an exclude list naming only junit-jupiter would let run alongside shard4j.
  */
 final class ShardingHarness {
 

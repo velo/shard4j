@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.engine;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -9,34 +10,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Best-effort classpath check of this release's critical build-tool dependencies, run once
- * per fork before a coordinated or direct execution starts. The tested versions live in
- * {@code compatibility.json}, shipped inside this jar and hand-edited alongside {@code
- * README.md}'s compatibility matrix -- the two must always name the same versions, and a
- * range widens only when this release's own CI has actually run against the new edge, per
- * {@code AGENTS.md}'s testing rule. Detection is per entry, by one of two probes:
- *
- * <ul>
- *   <li>{@code maven-artifact} reads {@code
- *       META-INF/maven/<groupId>/<artifactId>/pom.properties} off the classpath -- present
- *       in any jar Maven's own jar plugin built. surefire-booter is the fork's own entry
- *       point ({@code ForkedBooter}), shared by surefire and failsafe since they release
- *       from one version.
- *   <li>{@code package-version} reads {@link Package#getImplementationVersion()} off a
- *       named class's package -- for artifacts, like JUnit Platform's, that Gradle builds
- *       and so never carry a {@code pom.properties}.
- * </ul>
- *
- * <p>Either probe returning nothing (Gradle, an IDE runner, {@code forkCount=0}, a class
- * this entry names that is not on this classpath) means silence, not a warning: a consumer
- * this cannot identify is not penalised for it, matching every other corner of this
- * engine's inertness. Below {@code firstTested} is a hard failure naming the entry and the
- * detected version; above {@code lastTested} is a loud warning, not a failure -- it may
- * well work, nobody has run it yet.
+ * Best-effort classpath check of surefire/failsafe and JUnit Platform versions against
+ * {@code compatibility.json}. Errors below the tested floor, warns above the tested
+ * ceiling, stays silent when it can't detect the build tool at all.
  */
 final class CompatibilityMatrix {
 
   private static final System.Logger log = System.getLogger(CompatibilityMatrix.class.getName());
+
+  // Own mapper, deliberately not CoordinatorGateway.JSON: that one exists for
+  // wire-protocol forward-tolerance, an unrelated concern this client-only check must
+  // never couple to.
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   private static final String CATALOG_RESOURCE = "/shard4j/compatibility.json";
 
@@ -63,7 +48,7 @@ final class CompatibilityMatrix {
       if (stream == null) {
         return List.of();
       }
-      return List.of(CoordinatorGateway.JSON.readValue(stream, Entry[].class));
+      return List.of(JSON.readValue(stream, Entry[].class));
     } catch (IOException e) {
       throw new UncheckedIOException("Unable to read " + CATALOG_RESOURCE, e);
     }
@@ -100,18 +85,13 @@ final class CompatibilityMatrix {
     if (compare(parsedDetected, last) > 0) {
       log.log(
           System.Logger.Level.WARNING,
-          """
-
-              ################################################################
-              # shard4j: UNTESTED %s VERSION
-              #
-              # Detected %s %s. This release's own CI has only run up to %s.
-              # Newer versions are not known to be broken, but nothing has
-              # verified them either -- see README.md's compatibility matrix
-              # before relying on this combination.
-              ################################################################
-              """
-              .formatted(entry.id(), entry.id(), detected, entry.lastTested()));
+          entry.id()
+              + " "
+              + detected
+              + " is above shard4j's tested ceiling of "
+              + entry.lastTested()
+              + "; not known to be broken, but unverified. See README.md's compatibility"
+              + " matrix.");
     }
   }
 

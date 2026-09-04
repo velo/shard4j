@@ -7,9 +7,23 @@
     "lastTested": "${maven-surefire-plugin.version}"
   },
   {
-    "id": "junit-platform",
+    "id": "junit-platform-engine",
     "probe": "package-version",
     "probeClass": "org.junit.platform.engine.TestEngine",
+    "firstTested": "6.1.3",
+    "lastTested": "${junit.bom.version}"
+  },
+  {
+    "id": "junit-platform-launcher",
+    "probe": "package-version",
+    "probeClass": "org.junit.platform.launcher.Launcher",
+    "firstTested": "6.1.3",
+    "lastTested": "${junit.bom.version}"
+  },
+  {
+    "id": "junit-jupiter-engine",
+    "probe": "package-version",
+    "probeClass": "org.junit.jupiter.engine.JupiterTestEngine",
     "firstTested": "6.1.3",
     "lastTested": "${junit.bom.version}"
   }

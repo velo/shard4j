@@ -17,9 +17,9 @@ updates:
       # JUnit Platform: patch-only. The Platform has changed the API this engine builds on
       # binary-incompatibly on every recent minor, so a *minor* bump moves the floor for
       # every consumer -- which is how 0.2.0 shipped requiring 1.14 without anyone choosing
-      # to (#31). Patches within a minor keep the API shape, so those still flow. The
-      # signature history and the consumer-side fix live in one place: "JUnit Platform
-      # version alignment" in README.md.
+      # to (#31). Patches within a minor keep the API shape, so those still flow -- CI is
+      # what catches a patch that breaks behaviour (confirmed: 6.1.0/6.1.2 both fail
+      # against 6.1.3, see README.md's "JUnit Platform version alignment").
       - dependency-name: org.junit:junit-bom
         update-types:
           - "version-update:semver-major"
