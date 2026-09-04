@@ -7,7 +7,7 @@
   <parent>
     <groupId>com.marvinformatics</groupId>
     <artifactId>shard4j</artifactId>
-    <version>0.5.1-SNAPSHOT</version>
+    <version>0.6.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>shard4j-example</artifactId>
@@ -22,20 +22,7 @@
     <maven.source.skip>true</maven.source.skip>
     <maven.javadoc.skip>true</maven.javadoc.skip>
     <gpg.skip>true</gpg.skip>
-    <testcontainers.version>1.21.4</testcontainers.version>
   </properties>
-
-  <dependencyManagement>
-    <dependencies>
-      <dependency>
-        <groupId>org.junit</groupId>
-        <artifactId>junit-bom</artifactId>
-        <version>${junit.bom.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -61,13 +48,11 @@
     <dependency>
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
-      <version>${assertj.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>testcontainers</artifactId>
-      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -87,14 +72,16 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
         <configuration>
-          <!-- No <includes> block, ever. It replaces failsafe's defaults, and a
-               plausible one-line addition here silently drops the whole
-               default-matching suite and goes green having run nothing. Tag exclusion
-               is the safe filter: the sharding fixtures run only through the harness,
-               and a coordinated census inherits this exclusion rather than deadlocking
-               on units it would never be handed. -->
+          <!-- No <includes> block, ever: it replaces failsafe's defaults and could
+               silently drop the whole suite. <excludesFile>, not <excludedGroups>:
+               surefire/failsafe 3.6.0 parses <excludedGroups> but never builds the
+               tag filter from it (confirmed against 3.5.6). Excludes only the two
+               fixtures with no standalone verdict: AlwaysFailsIT is meant to fail,
+               and FlakyGatewayIT's counter is real-fork-unsafe (see its own doc).
+               Every other fixture also runs for real here, not just through the
+               harness. -->
           <rerunFailingTestsCount>0</rerunFailingTestsCount>
-          <excludedGroups>shard4j-fixture</excludedGroups>
+          <excludesFile>${project.basedir}/src/test/resources/shard4j-fixtures.excludes</excludesFile>
           <environmentVariables>
             <SHARD_COORDINATOR_SECRET>local-integration-only</SHARD_COORDINATOR_SECRET>
           </environmentVariables>
@@ -178,10 +165,16 @@
               <rerunFailingTestsCount>0</rerunFailingTestsCount>
               <!-- Non-zero would stop a shard early with leases unhonoured. -->
               <skipAfterFailureCount>0</skipAfterFailureCount>
-              <!-- The census inherits this filter, so what a shard is never handed is
-                   never registered either. The harness tests drive their own launcher
-                   sessions and stay out of a coordinated run. -->
-              <excludedGroups>shard4j-fixture,shard4j-harness</excludedGroups>
+              <!-- The census inherits this filter: what a shard is never handed is
+                   never registered. The harness tests drive their own launcher
+                   sessions and stay out of a coordinated run: the shared fixture
+                   list above, plus the harness classes themselves. -->
+              <excludesFile>${project.basedir}/src/test/resources/shard4j-fixtures.excludes</excludesFile>
+              <excludes>
+                <exclude>**/CoordinatedShardingE2EIT.java</exclude>
+                <exclude>**/InertEngineIT.java</exclude>
+                <exclude>**/OrderingAndRetryE2EIT.java</exclude>
+              </excludes>
             </configuration>
             <executions>
               <!-- The default single execution belongs to the uncoordinated build. -->

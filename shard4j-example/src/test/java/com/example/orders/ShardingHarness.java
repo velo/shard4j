@@ -3,6 +3,7 @@ package com.example.orders;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.marvinformatics.shard4j.engine.Shard4jTestEngine;
 import com.marvinformatics.shard4j.protocol.SessionView;
 import feign.Feign;
 import feign.Param;
@@ -32,12 +33,10 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 
 /**
- * Simulates what failsafe's coordinated profile does -- exclude junit-jupiter, hand the
- * suite to the shard4j engine with per-shard configuration -- through the launcher, in
- * process, against the real coordinator jar running in a real container. Three shards are
- * three launcher sessions, and each is one execution, exactly as the profile's single
- * failsafe execution block runs it: retries happen inside a shard's own loop, so a second
- * session for the same shard would be simulating a configuration nobody declares.
+ * Simulates failsafe's coordinated profile -- hand the suite to the shard4j engine alone,
+ * per shard -- through the launcher, in process, against the real coordinator jar. Engines
+ * are included by id, not excluded by name: surefire 3.6.0+ puts an extra engine on this
+ * classpath that an exclude list naming only junit-jupiter would let run alongside shard4j.
  */
 final class ShardingHarness {
 
@@ -110,7 +109,7 @@ final class ShardingHarness {
       String coordinatorUrl, String sessionId, int shard, List<Class<?>> classes) {
     LauncherDiscoveryRequestBuilder builder =
         LauncherDiscoveryRequestBuilder.request()
-            .filters(EngineFilter.excludeEngines("junit-jupiter"))
+            .filters(EngineFilter.includeEngines(Shard4jTestEngine.ENGINE_ID))
             .configurationParameter("shard.enabled", "true")
             .configurationParameter("shard.coordinator.url", coordinatorUrl)
             .configurationParameter("shard.session.id", sessionId)

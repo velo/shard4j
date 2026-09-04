@@ -7,7 +7,7 @@
   <parent>
     <groupId>com.marvinformatics</groupId>
     <artifactId>shard4j</artifactId>
-    <version>0.5.1-SNAPSHOT</version>
+    <version>0.6.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>shard4j-engine</artifactId>
@@ -17,34 +17,7 @@
 
   <properties>
     <forbiddenapis.version>3.10</forbiddenapis.version>
-    <testcontainers.version>1.21.4</testcontainers.version>
   </properties>
-
-  <dependencyManagement>
-    <dependencies>
-      <dependency>
-        <groupId>org.junit</groupId>
-        <artifactId>junit-bom</artifactId>
-        <version>${junit.bom.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-      <dependency>
-        <groupId>io.github.openfeign</groupId>
-        <artifactId>feign-bom</artifactId>
-        <version>${feign.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-      <dependency>
-        <groupId>com.fasterxml.jackson</groupId>
-        <artifactId>jackson-bom</artifactId>
-        <version>${jackson.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -97,13 +70,11 @@
     <dependency>
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
-      <version>${assertj.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>testcontainers</artifactId>
-      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
 
@@ -112,12 +83,29 @@
     <dependency>
       <groupId>org.projectlombok</groupId>
       <artifactId>lombok</artifactId>
-      <version>${lombok.version}</version>
       <scope>provided</scope>
     </dependency>
   </dependencies>
 
   <build>
+    <resources>
+      <!-- Unfiltered by default (META-INF/services must pass through byte-for-byte);
+           compatibility.json alone is filtered so lastTested resolves from this
+           reactor's own pom properties. -->
+      <resource>
+        <directory>src/main/resources</directory>
+        <excludes>
+          <exclude>shard4j/compatibility.json</exclude>
+        </excludes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <includes>
+          <include>shard4j/compatibility.json</include>
+        </includes>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
     <plugins>
       <!-- JDK 23+ no longer runs classpath annotation processors implicitly, so
            Lombok must be named here to run at all. -->
