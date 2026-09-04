@@ -400,6 +400,13 @@
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-javadoc-plugin</artifactId>
             <version>${maven-javadoc-plugin.version}</version>
+            <!-- The plugin decides whether to pass the "no fonts" flag by inspecting the
+                 JVM running Maven, not the toolchain JDK it forks javadoc through. That
+                 JVM is 25 here, but shard4j-protocol/engine/example fork javadoc through
+                 the JDK 17 toolchain, whose javadoc rejects the flag as unknown. -->
+            <configuration>
+              <disableNoFonts>true</disableNoFonts>
+            </configuration>
             <executions>
               <execution>
                 <id>attach-javadocs</id>
