@@ -254,9 +254,9 @@ exactly one.
 JVM. Each slot asks the coordinator for a class, drains it completely, and runs it as its
 own nested execution, so `@BeforeAll` stays a once-per-class cost while two heavy classes
 overlap in wall time. The ask-and-drain step is serialised across slots and a class is
-fully leased before the next open ask, so the second slot receives the next-slowest
-remaining class -- cross-class slowest-first ordering is preserved, not degraded to
-whichever classes are adjacent. Parallelising *within* a class instead would buy almost
+fully leased before the next open ask, so the second slot receives the next-heaviest
+remaining class -- cross-class ordering is preserved, not degraded to whichever classes
+are adjacent. Parallelising *within* a class instead would buy almost
 nothing on real suites, where most of the duration mass sits in single-leaf classes.
 
 The default is `1`, which is byte-for-byte today's strictly serial behaviour. Nothing on
@@ -377,11 +377,14 @@ There is no public specification document yet; the shape of the system is this.
 A run is a session. Each CI shard registers with the coordinator, then loops: ask what
 to run next, drain the class the coordinator names, report each result, and ask again
 until the coordinator has nothing left to hand out. The choice of class is the
-coordinator's, made from durations measured on earlier runs: the class holding the
-slowest remaining test is named first, and the answer carries that class's first batch of
-leases so a named class is never an empty promise. A test with no history runs before
-every measured one, ordered by a hash of its identity, so the schedule stays
-deterministic without being alphabetical. Every grant is a lease with an expiry and a
+coordinator's, made from durations measured on earlier runs: the class with the largest
+measured total still to run is named first, and the answer carries that class's first
+batch of leases so a named class is never an empty promise. The total, not the single
+slowest test in it -- a class is what one runner drains, so twenty 30s tests outrank a
+class holding one 120s test, and a class already half drained sinks as it empties. Within
+the class the order is slowest test first. A test with no history runs before every
+measured one, ordered by a hash of its identity, so the schedule stays deterministic
+without being alphabetical. Every grant is a lease with an expiry and a
 fence, so a shard that stalls or dies loses its work back to the queue instead of taking
 the run down with it.
 Draining a class grants all of its leases up front, so the lease TTL must cover a shard's
@@ -390,8 +393,13 @@ once `shard.concurrency` exceeds 1 (see the in-shard parallelism contract).
 
 Retries are re-queues, not in-place re-runs and not extra passes over the session: a
 failure with attempt budget left puts the unit straight back on the claimable queue, where
-whichever shard asks next takes it -- usually not the one that just failed it, which is the
-point. `COORDINATOR_MAX_ATTEMPTS` (default 3) bounds the attempts per unit; the last one
+whichever shard asks next takes it -- and not the shard that just failed it, if there is
+any alternative. Whatever was wrong with that JVM, that machine or the state it left
+behind is still there, so the open ask skips whole classes still holding this shard's
+failures and sends it to different work, dropping the preference only when every remaining
+class is such a class: a same-shard retry beats no retry. The choice is made once, at the
+class a shard is sent to; a requeued failure is never withheld from a shard that asks for
+it. `COORDINATOR_MAX_ATTEMPTS` (default 3) bounds the attempts per unit; the last one
 has nothing behind it and its failure is terminal. Because the requeue lands inside the
 same execution, a shard that has run out of work waits at the barrier rather than exiting,
 and is released only once it cannot be needed.

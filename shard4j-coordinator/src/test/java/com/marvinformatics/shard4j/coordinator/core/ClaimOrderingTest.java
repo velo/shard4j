@@ -22,6 +22,12 @@ class ClaimOrderingTest {
     return new ClaimableUnit(executionId, CensusUnit.parse(executionId), false);
   }
 
+  private static ClaimableUnit unitIn(String className, String method) {
+    String executionId =
+        "[engine:junit-jupiter]/[class:" + className + "]/[method:" + method + "()]";
+    return new ClaimableUnit(executionId, CensusUnit.parse(executionId), false);
+  }
+
   private static List<String> orderedIds(
       List<ClaimableUnit> candidates, Function<HistoryKey, OptionalLong> estimates) {
     return ClaimOrdering.order(candidates, unit -> estimates.apply(unit.historyKey())).stream()
@@ -89,6 +95,77 @@ class ClaimOrderingTest {
                     ? OptionalLong.empty()
                     : OptionalLong.of(10_000L));
     assertThat(ordered).containsExactly(unit("mystery"), unit("known"), measured, probe);
+  }
+
+  /**
+   * A class is what one runner drains, so its remaining total is what ranks it -- not the
+   * single loudest test inside it. Ranking by the slowest unit put the class with the one
+   * headline test ahead of a class carrying four times its wall time.
+   */
+  @Test
+  void measuredClassesRankByRemainingTotalNotBySlowestUnit() {
+    String bulk = "com.example.orders.BulkIT";
+    String headline = "com.example.orders.HeadlineIT";
+    Map<String, Long> estimates =
+        Map.of(
+            "com.example.orders.BulkIT#one()", 60_000L,
+            "com.example.orders.BulkIT#two()", 60_000L,
+            "com.example.orders.BulkIT#three()", 60_000L,
+            "com.example.orders.BulkIT#four()", 60_000L,
+            "com.example.orders.HeadlineIT#theLongOne()", 120_000L);
+    List<ClaimableUnit> ordered =
+        ClaimOrdering.order(
+            List.of(
+                unitIn(headline, "theLongOne"),
+                unitIn(bulk, "one"),
+                unitIn(bulk, "two"),
+                unitIn(bulk, "three"),
+                unitIn(bulk, "four")),
+            unit -> OptionalLong.of(estimates.get(unit.historyKey().value())));
+
+    assertThat(ordered)
+        .extracting(ClaimableUnit::className)
+        .containsExactly(bulk, bulk, bulk, bulk, headline);
+  }
+
+  /** Only what is still claimable counts: a class drained down to its last test sinks. */
+  @Test
+  void aPartlyDrainedClassRanksOnWhatRemainsOfIt() {
+    String draining = "com.example.orders.DrainingIT";
+    String intact = "com.example.orders.IntactIT";
+    Map<String, Long> estimates =
+        Map.of(
+            "com.example.orders.DrainingIT#leftover()", 30_000L,
+            "com.example.orders.IntactIT#first()", 40_000L,
+            "com.example.orders.IntactIT#second()", 40_000L);
+    List<ClaimableUnit> ordered =
+        ClaimOrdering.order(
+            List.of(
+                unitIn(draining, "leftover"), unitIn(intact, "first"), unitIn(intact, "second")),
+            unit -> OptionalLong.of(estimates.get(unit.historyKey().value())));
+
+    assertThat(ordered)
+        .extracting(ClaimableUnit::className)
+        .containsExactly(intact, intact, draining);
+  }
+
+  /** A probe is an unmeasured maybe, so it must not inflate the total that ranks its class. */
+  @Test
+  void probesDoNotCountTowardTheirClassTotal() {
+    String withProbe = "com.example.orders.TemplateIT";
+    String rival = "com.example.orders.RivalIT";
+    String template =
+        "[engine:junit-jupiter]/[class:" + withProbe + "]/[test-template:rows(java.lang.String)]";
+    ClaimableUnit measured =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(1), false);
+    ClaimableUnit probe =
+        new ClaimableUnit(template, CensusUnit.parse(template).atPosition(2), true);
+    List<ClaimableUnit> ordered =
+        ClaimOrdering.order(
+            List.of(probe, measured, unitIn(rival, "solid")),
+            unit -> unit.probe() ? OptionalLong.empty() : OptionalLong.of(50_000L));
+
+    assertThat(ordered).containsExactly(unitIn(rival, "solid"), measured, probe);
   }
 
   @Test

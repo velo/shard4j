@@ -182,16 +182,19 @@ public final class CoordinatorCore {
   }
 
   /**
-   * The open ask -- "what do I run next?" -- which is where cross-class slowest-first
-   * actually lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class
-   * of the top-ranked unit is the answer, and that class's first capped batch is leased in
-   * the same locked breath so a named class is never an empty promise. The pool arrives
-   * already parsed, so ranking it costs no id surgery. Ranking whole units
-   * rather than class aggregates means the fixed unit rules extend across classes for
-   * free: a class holding a no-history unit outranks every fully-measured class, in the
-   * pinned hash order of its unknowns, and known classes follow by their slowest remaining
-   * unit. The shard drains the named class through the per-class claim before asking
-   * again, which is what keeps {@code @BeforeAll} a once-per-class cost.
+   * The open ask -- "what do I run next?" -- which is where cross-class ordering actually
+   * lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class of the
+   * top-ranked unit is the answer, and that class's first capped batch is leased in the
+   * same locked breath so a named class is never an empty promise. The shard drains the
+   * named class through the per-class claim before asking again, which is what keeps
+   * {@code @BeforeAll} a once-per-class cost.
+   *
+   * <p>Two selection passes. The first skips any class still holding a unit this shard
+   * failed, sending it to different work and leaving the retry for somebody else; the
+   * second, reached only when every class is such a class, drops the preference rather
+   * than strand a retry on the last shard standing. The choice is made once, at the class
+   * the shard is sent to -- leasing stays one unconditional rule, so what a shard drains
+   * never depends on which endpoint it asked through.
    */
   public NextClassResponse nextClass(String sessionId, NextClassRequest request) {
     synchronized (writeLock) {
@@ -205,38 +208,56 @@ public final class CoordinatorCore {
         return new NextClassResponse(null, List.of());
       }
       List<ClaimableUnit> ordered = orderFor(session.claimable());
-      Set<String> triedClasses = new LinkedHashSet<>();
-      for (ClaimableUnit top : ordered) {
-        String className = top.className();
-        if (!triedClasses.add(className)) {
-          continue;
-        }
-        List<ClaimableUnit> inChosenClass =
-            ordered.stream().filter(unit -> className.equals(unit.className())).toList();
-        List<Grant> granted =
-            grantCapped(session, request.shard(), inChosenClass, now);
-        if (!granted.isEmpty()) {
-          joinLogged(sessionId, session, request.shard(), now);
-          return new NextClassResponse(className, granted);
-        }
-        // Everything in this class is capped for this shard right now: its share of the
-        // class's invocations is taken and the rest is held for shards still working or
-        // still arriving. The next class in the schedule may still have work for it.
+      NextClassResponse answer =
+          leaseTopClassFor(sessionId, session, request.shard(), ordered, now, true);
+      if (answer == null) {
+        // Every remaining class holds a failure of this shard's: retrying one beats idling.
+        answer = leaseTopClassFor(sessionId, session, request.shard(), ordered, now, false);
       }
-      // The empty answer is a commitment: the shard's pull loop stops on it, so it is
-      // remembered -- the fair-share cap must never again hold anything back for a shard
-      // that will not ask.
+      if (answer != null) {
+        return answer;
+      }
+      // The empty answer is a commitment -- the pull loop stops on it -- so it is
+      // remembered: never hold a share back for a shard that will not ask again.
       session.markExhausted(request.shard());
       joinLogged(sessionId, session, request.shard(), now);
       return new NextClassResponse(null, List.of());
     }
   }
 
+  /** One pass over the ranked pool: the top class that yields a grant, or null if none. */
+  private NextClassResponse leaseTopClassFor(
+      String sessionId,
+      Session session,
+      int shard,
+      List<ClaimableUnit> ordered,
+      Instant now,
+      boolean avoidOwnFailures) {
+    Set<String> triedClasses = new LinkedHashSet<>();
+    for (ClaimableUnit top : ordered) {
+      String className = top.className();
+      if (!triedClasses.add(className)) {
+        continue;
+      }
+      List<ClaimableUnit> inChosenClass =
+          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
+      if (avoidOwnFailures && session.holdsAFailureBy(inChosenClass, shard)) {
+        continue;
+      }
+      List<Grant> granted = grantCapped(session, shard, inChosenClass, now);
+      if (!granted.isEmpty()) {
+        joinLogged(sessionId, session, shard, now);
+        return new NextClassResponse(className, granted);
+      }
+      // Every invocation here is capped for this shard; the next class may still have work.
+    }
+    return null;
+  }
+
   /**
    * Leases the capped prefix of an already-ordered claimable list. Whole units lease
-   * freely, exactly as before distribution existed; expanded invocation units are
-   * additionally held to the method's fair-share allowance, so one fast asker cannot take
-   * a template whose spreading is the entire point of expanding it.
+   * freely; expanded invocation units are held to the method's fair-share allowance, so one
+   * fast asker cannot take a template whose spreading is the point of expanding it.
    */
   private List<Grant> grantCapped(
       Session session, int shard, List<ClaimableUnit> ordered, Instant now) {
