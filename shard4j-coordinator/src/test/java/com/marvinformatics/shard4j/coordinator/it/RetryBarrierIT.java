@@ -206,6 +206,34 @@ class RetryBarrierIT {
     assertThat(CoverageVerdict.of(client.view(sessionId))).isEqualTo(SessionVerdict.PASSED);
   }
 
+  /**
+   * The hold-back is a rule about which class a shard is sent to, not about which units it
+   * may lease once it is there -- so a class still holding this shard's failure is skipped
+   * whole, even though it has untouched work in it that the shard would otherwise be given.
+   * Skipping units instead would hand the shard that class and let the drain claim the
+   * failure straight back on its next lap.
+   */
+  @Test
+  void givenAFailureInAClassWithOtherWork_whenTheFailingShardAsksAgain_thenThatClassIsSkipped() {
+    String sessionId = UUID.randomUUID().toString();
+    String sharedClass = "com.example.orders.SameClassRetryIT";
+    String otherClass = "com.example.orders.SameClassRivalIT";
+    String flaky = Ids.method(sharedClass, "flaky");
+    String sibling = Ids.method(sharedClass, "sibling");
+    String elsewhere = Ids.method(otherClass, "elsewhere");
+    List<String> census = List.of(flaky, sibling, elsewhere);
+    client.register(sessionId, registration(0, census));
+
+    Fence flakyFence = client.claimOne(sessionId, 0, flaky);
+    client.result(sessionId, result(0, flaky, flakyFence, Outcome.FAILED));
+
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
+    assertThat(next.className())
+        .as("the class holding this shard's failure is skipped whole, sibling work and all")
+        .isEqualTo(otherClass);
+    assertThat(next.granted()).extracting(Grant::testId).containsExactly(elsewhere);
+  }
+
   @Test
   void givenAnAllGreenMainPass_whenTheLastShardArrives_thenEveryShardIsReleased() {
     String sessionId = UUID.randomUUID().toString();
@@ -312,21 +340,14 @@ class RetryBarrierIT {
     // the run was INCOMPLETE however healthy the survivor was. With no pools, PENDING is
     // PENDING: whoever is still alive picks it up.
     assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.RUN);
-    ClaimResponse abandoned = client.claim(sessionId, new ClaimRequest(0, className, census));
-    assertThat(abandoned.granted())
-        .as("the ghost's abandoned unit comes first: it is work this shard has not failed")
+    ClaimResponse retry = client.claim(sessionId, new ClaimRequest(0, className, census));
+    assertThat(retry.granted())
+        .as("the survivor takes its own requeued failure and the ghost's abandoned unit")
         .extracting(Grant::testId)
-        .containsExactly(stranded);
-    client.result(
-        sessionId, result(0, stranded, abandoned.granted().get(0).fence(), Outcome.PASSED));
-
-    NextClassResponse ownFailure = client.next(sessionId, new NextClassRequest(0));
-    assertThat(ownFailure.granted())
-        .as("with nothing else left, the survivor takes its own requeued failure back")
-        .extracting(Grant::testId)
-        .containsExactly(flaky);
-    client.result(
-        sessionId, result(0, flaky, ownFailure.granted().get(0).fence(), Outcome.PASSED));
+        .containsExactlyInAnyOrder(flaky, stranded);
+    for (Grant grant : retry.granted()) {
+      client.result(sessionId, result(0, grant.testId(), grant.fence(), Outcome.PASSED));
+    }
 
     assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.DONE);
     client.depart(sessionId, new DepartRequest(0, 1));

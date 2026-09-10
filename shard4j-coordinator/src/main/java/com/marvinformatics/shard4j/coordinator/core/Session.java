@@ -249,6 +249,22 @@ final class Session {
     return fairShare.invocationAllowance(unitsOfMethod, shard, now);
   }
 
+  /**
+   * Does this batch still hold something this shard already failed? Whatever was wrong with
+   * that JVM or the state it left behind is still there, so the open ask sends the shard to
+   * a different class while one exists -- a preference expressed once, when the class is
+   * chosen, never a unit withheld from a shard that asks for it.
+   */
+  boolean holdsAFailureBy(List<ClaimableUnit> batch, int shard) {
+    return batch.stream()
+        .map(unit -> units.get(unit.id()))
+        .anyMatch(
+            unit ->
+                unit.records.stream()
+                    .anyMatch(
+                        record -> record.shard() == shard && record.outcome() == Outcome.FAILED));
+  }
+
   /** Work still in play: a unit claimable now, or one leased that could yet requeue. */
   boolean hasOutstandingWork() {
     return units.values().stream()
@@ -364,18 +380,6 @@ final class Session {
    * spent, so the promise the grant carries and the decision that honours it cannot say
    * different things.
    */
-  /**
-   * Did this shard already fail this unit? Whatever was wrong with that JVM or the state it
-   * left behind is still there, so {@code CoordinatorCore} sends the retry elsewhere while
-   * it can -- a preference, never a withholding.
-   */
-  boolean failedBy(String testId, int shard) {
-    UnitState unit = units.get(testId);
-    return unit != null
-        && unit.records.stream()
-            .anyMatch(record -> record.shard() == shard && record.outcome() == Outcome.FAILED);
-  }
-
   boolean retryableAfterFailure(String testId) {
     return attemptsOf(testId) + 1 < maxAttempts;
   }
@@ -417,8 +421,8 @@ final class Session {
       case PASSED -> unit.state = TestState.PASSED;
       case FAILED -> {
         // The whole retry model, in two lines: spend an attempt, and go straight back to the
-        // claimable queue if any remain. No pass-specific pool and no barrier to wait on --
-        // whichever shard asks next takes it, which is usually a different one.
+        // claimable queue if any remain. No pass-specific pool and no barrier to wait on;
+        // the open ask is what steers the retry away from the shard that just failed it.
         unit.attempts++;
         unit.state = unit.attempts < maxAttempts ? TestState.PENDING : TestState.FAILED;
       }

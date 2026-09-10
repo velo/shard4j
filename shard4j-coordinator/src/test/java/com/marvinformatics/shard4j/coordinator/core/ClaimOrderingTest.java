@@ -123,8 +123,9 @@ class ClaimOrderingTest {
                 unitIn(bulk, "four")),
             unit -> OptionalLong.of(estimates.get(unit.historyKey().value())));
 
-    assertThat(ordered).extracting(ClaimableUnit::className).startsWith(bulk, bulk, bulk, bulk);
-    assertThat(ordered.get(4).className()).isEqualTo(headline);
+    assertThat(ordered)
+        .extracting(ClaimableUnit::className)
+        .containsExactly(bulk, bulk, bulk, bulk, headline);
   }
 
   /** Only what is still claimable counts: a class drained down to its last test sinks. */
@@ -139,10 +140,13 @@ class ClaimOrderingTest {
             "com.example.orders.IntactIT#second()", 40_000L);
     List<ClaimableUnit> ordered =
         ClaimOrdering.order(
-            List.of(unitIn(draining, "leftover"), unitIn(intact, "first"), unitIn(intact, "second")),
+            List.of(
+                unitIn(draining, "leftover"), unitIn(intact, "first"), unitIn(intact, "second")),
             unit -> OptionalLong.of(estimates.get(unit.historyKey().value())));
 
-    assertThat(ordered).extracting(ClaimableUnit::className).containsExactly(intact, intact, draining);
+    assertThat(ordered)
+        .extracting(ClaimableUnit::className)
+        .containsExactly(intact, intact, draining);
   }
 
   /** A probe is an unmeasured maybe, so it must not inflate the total that ranks its class. */

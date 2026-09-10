@@ -393,13 +393,13 @@ once `shard.concurrency` exceeds 1 (see the in-shard parallelism contract).
 
 Retries are re-queues, not in-place re-runs and not extra passes over the session: a
 failure with attempt budget left puts the unit straight back on the claimable queue, where
-whichever shard asks next takes it. Not the shard that just failed it, if there is any
-alternative: whatever was wrong with that JVM, that machine or the state it left behind is
-still there, so a retry is worth the most somewhere else. So the open ask holds such a unit
-back from the shard that failed it and hands it a different class while any exists -- and
-drops the preference the moment the alternative is idling, since a same-shard retry beats
-no retry. A requeued failure stays claimable by everyone throughout: it is deprioritised
-for one shard, never withheld from it. `COORDINATOR_MAX_ATTEMPTS` (default 3) bounds the attempts per unit; the last one
+whichever shard asks next takes it -- and not the shard that just failed it, if there is
+any alternative. Whatever was wrong with that JVM, that machine or the state it left
+behind is still there, so the open ask skips whole classes still holding this shard's
+failures and sends it to different work, dropping the preference only when every remaining
+class is such a class: a same-shard retry beats no retry. The choice is made once, at the
+class a shard is sent to; a requeued failure is never withheld from a shard that asks for
+it. `COORDINATOR_MAX_ATTEMPTS` (default 3) bounds the attempts per unit; the last one
 has nothing behind it and its failure is terminal. Because the requeue lands inside the
 same execution, a shard that has run out of work waits at the barrier rather than exiting,
 and is released only once it cannot be needed.

@@ -3,7 +3,7 @@ package com.marvinformatics.shard4j.coordinator.core;
 import com.marvinformatics.shard4j.protocol.HistoryKey;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -11,15 +11,15 @@ import java.util.function.Function;
 import lombok.experimental.UtilityClass;
 
 /**
- * The order in which claimable units are granted: slowest class first by the measured
- * remaining total of the class, with unknown-duration units ahead of every known one,
- * ordered among themselves by the pinned SHA-256 hash of their history key -- and
- * cardinality probes last of all.
+ * The order in which claimable units are granted: unknown-duration units first, in the
+ * pinned SHA-256 hash order of their history key, then measured classes by their remaining
+ * total and slowest unit first within each, and cardinality probes last of all.
  *
- * <p>The measured tier ranks by <em>class</em> total because a class is what one runner
- * drains: twenty 30s tests outrank a class holding one 120s test, which ranking by the
- * slowest single unit had backwards. Only what is still claimable counts, and inside the
- * chosen class the order stays slowest unit first.
+ * <p>The measured tier ranks whole classes because a class is what one runner drains:
+ * twenty 30s tests outrank a class holding one 120s test, which ranking by the slowest
+ * single unit had backwards. Only what is still claimable counts, so a half-drained class
+ * sinks as it empties. A class's units stay contiguous in the result, which is the property
+ * the scheduler reads it for.
  *
  * <p>"Is this duration known?" is the absence of the key in the store -- no flag, no
  * sentinel estimate. Unknowns are never compared against a known duration, which makes the
@@ -40,14 +40,25 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class ClaimOrdering {
 
+  private record Ranked(ClaimableUnit unit, OptionalLong estimate) {}
+
+  private record ClassGroup(String className, long total, List<Ranked> units) {}
+
+  private static final Comparator<Ranked> HASH_ORDER =
+      Comparator.comparing((Ranked ranked) -> ranked.unit().historyKey(), HistoryKey.NO_HISTORY_ORDER)
+          .thenComparing(ranked -> ranked.unit().id());
+
+  private static final Comparator<Ranked> SLOWEST_FIRST =
+      Comparator.comparingLong((Ranked ranked) -> ranked.estimate().getAsLong())
+          .reversed()
+          .thenComparing(ranked -> ranked.unit().historyKey().value())
+          .thenComparing(ranked -> ranked.unit().id());
+
+  private static final Comparator<ClassGroup> HEAVIEST_FIRST =
+      Comparator.comparingLong(ClassGroup::total).reversed().thenComparing(ClassGroup::className);
+
   public List<ClaimableUnit> order(
       List<ClaimableUnit> candidates, Function<ClaimableUnit, OptionalLong> estimates) {
-    record Ranked(ClaimableUnit unit, OptionalLong estimate) {}
-
-    Comparator<Ranked> hashOrder =
-        Comparator.comparing((Ranked ranked) -> ranked.unit().historyKey(), HistoryKey.NO_HISTORY_ORDER)
-            .thenComparing(ranked -> ranked.unit().id());
-
     List<Ranked> unknown = new ArrayList<>();
     List<Ranked> known = new ArrayList<>();
     List<Ranked> probe = new ArrayList<>();
@@ -59,25 +70,31 @@ public class ClaimOrdering {
       OptionalLong estimate = estimates.apply(candidate);
       (estimate.isPresent() ? known : unknown).add(new Ranked(candidate, estimate));
     }
-
-    Map<String, Long> classTotals = new HashMap<>();
-    for (Ranked ranked : known) {
-      classTotals.merge(ranked.unit().className(), ranked.estimate().getAsLong(), Long::sum);
-    }
-
-    unknown.sort(hashOrder);
-    known.sort(
-        Comparator.comparingLong((Ranked ranked) -> classTotals.get(ranked.unit().className()))
-            .thenComparingLong(ranked -> ranked.estimate().getAsLong())
-            .reversed()
-            .thenComparing(ranked -> ranked.unit().historyKey().value())
-            .thenComparing(ranked -> ranked.unit().id()));
-    probe.sort(hashOrder);
+    unknown.sort(HASH_ORDER);
+    probe.sort(HASH_ORDER);
 
     List<ClaimableUnit> ordered = new ArrayList<>(candidates.size());
     unknown.forEach(ranked -> ordered.add(ranked.unit()));
-    known.forEach(ranked -> ordered.add(ranked.unit()));
+    for (ClassGroup group : groupByClass(known)) {
+      group.units().forEach(ranked -> ordered.add(ranked.unit()));
+    }
     probe.forEach(ranked -> ordered.add(ranked.unit()));
     return ordered;
+  }
+
+  private List<ClassGroup> groupByClass(List<Ranked> known) {
+    Map<String, List<Ranked>> byClass = new LinkedHashMap<>();
+    for (Ranked ranked : known) {
+      byClass.computeIfAbsent(ranked.unit().className(), name -> new ArrayList<>()).add(ranked);
+    }
+    List<ClassGroup> groups = new ArrayList<>(byClass.size());
+    byClass.forEach(
+        (className, units) -> {
+          units.sort(SLOWEST_FIRST);
+          long total = units.stream().mapToLong(ranked -> ranked.estimate().getAsLong()).sum();
+          groups.add(new ClassGroup(className, total, units));
+        });
+    groups.sort(HEAVIEST_FIRST);
+    return groups;
   }
 }

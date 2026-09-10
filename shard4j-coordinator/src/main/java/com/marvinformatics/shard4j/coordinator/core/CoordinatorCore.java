@@ -175,12 +175,7 @@ public final class CoordinatorCore {
               .flatMap(candidate -> session.claimableUnitsOf(candidate).stream())
               .toList();
       List<ClaimableUnit> ordered = orderFor(claimable);
-      // "A requeued failure is claimable right now" is this endpoint's contract, so the
-      // hold-back may reorder a claim, never empty it.
-      List<Grant> granted = grantCapped(session, request.shard(), ordered, now, true);
-      if (granted.isEmpty()) {
-        granted = grantCapped(session, request.shard(), ordered, now, false);
-      }
+      List<Grant> granted = grantCapped(session, request.shard(), ordered, now);
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
@@ -194,9 +189,12 @@ public final class CoordinatorCore {
    * named class through the per-class claim before asking again, which is what keeps
    * {@code @BeforeAll} a once-per-class cost.
    *
-   * <p>Two passes: the first holds back units this shard has already failed, leaving its
-   * own failure for somebody else; the second, reached only when the first found nothing
-   * at all, drops that preference rather than strand a retry on the last shard standing.
+   * <p>Two selection passes. The first skips any class still holding a unit this shard
+   * failed, sending it to different work and leaving the retry for somebody else; the
+   * second, reached only when every class is such a class, drops the preference rather
+   * than strand a retry on the last shard standing. The choice is made once, at the class
+   * the shard is sent to -- leasing stays one unconditional rule, so what a shard drains
+   * never depends on which endpoint it asked through.
    */
   public NextClassResponse nextClass(String sessionId, NextClassRequest request) {
     synchronized (writeLock) {
@@ -209,10 +207,12 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      NextClassResponse answer = nameClass(sessionId, session, request.shard(), now, true);
+      List<ClaimableUnit> ordered = orderFor(session.claimable());
+      NextClassResponse answer =
+          leaseTopClassFor(sessionId, session, request.shard(), ordered, now, true);
       if (answer == null) {
-        // Nothing left but this shard's own failures: retrying one beats idling.
-        answer = nameClass(sessionId, session, request.shard(), now, false);
+        // Every remaining class holds a failure of this shard's: retrying one beats idling.
+        answer = leaseTopClassFor(sessionId, session, request.shard(), ordered, now, false);
       }
       if (answer != null) {
         return answer;
@@ -226,9 +226,13 @@ public final class CoordinatorCore {
   }
 
   /** One pass over the ranked pool: the top class that yields a grant, or null if none. */
-  private NextClassResponse nameClass(
-      String sessionId, Session session, int shard, Instant now, boolean deferOwnFailures) {
-    List<ClaimableUnit> ordered = orderFor(session.claimable());
+  private NextClassResponse leaseTopClassFor(
+      String sessionId,
+      Session session,
+      int shard,
+      List<ClaimableUnit> ordered,
+      Instant now,
+      boolean avoidOwnFailures) {
     Set<String> triedClasses = new LinkedHashSet<>();
     for (ClaimableUnit top : ordered) {
       String className = top.className();
@@ -237,12 +241,15 @@ public final class CoordinatorCore {
       }
       List<ClaimableUnit> inChosenClass =
           ordered.stream().filter(unit -> className.equals(unit.className())).toList();
-      List<Grant> granted = grantCapped(session, shard, inChosenClass, now, deferOwnFailures);
+      if (avoidOwnFailures && session.holdsAFailureBy(inChosenClass, shard)) {
+        continue;
+      }
+      List<Grant> granted = grantCapped(session, shard, inChosenClass, now);
       if (!granted.isEmpty()) {
         joinLogged(sessionId, session, shard, now);
         return new NextClassResponse(className, granted);
       }
-      // Held back for this shard right now: a capped share, or a failure it owns.
+      // Every invocation here is capped for this shard; the next class may still have work.
     }
     return null;
   }
@@ -251,22 +258,14 @@ public final class CoordinatorCore {
    * Leases the capped prefix of an already-ordered claimable list. Whole units lease
    * freely; expanded invocation units are held to the method's fair-share allowance, so one
    * fast asker cannot take a template whose spreading is the point of expanding it.
-   * {@code deferOwnFailures} adds the retry hold-back of {@link Session#failedBy}.
    */
   private List<Grant> grantCapped(
-      Session session,
-      int shard,
-      List<ClaimableUnit> ordered,
-      Instant now,
-      boolean deferOwnFailures) {
+      Session session, int shard, List<ClaimableUnit> ordered, Instant now) {
     List<Grant> granted = new ArrayList<>();
     Map<String, Integer> allowanceLeft = new HashMap<>();
     for (ClaimableUnit unit : ordered) {
       if (granted.size() >= maxClaimBatch) {
         break;
-      }
-      if (deferOwnFailures && session.failedBy(unit.id(), shard)) {
-        continue;
       }
       if (unit.invocation() != null) {
         int left =
