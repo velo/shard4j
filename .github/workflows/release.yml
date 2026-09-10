@@ -37,14 +37,18 @@ jobs:
           echo "default-key $(gpg --list-keys --with-colons | grep pub | cut -d':' -f5)" >> ~/.gnupg/gpg.conf
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
 
+      # Through the environment and quoted on use, never spliced into the script text: the
+      # secret carries its own attribute quotes, and a double-quoted echo strips them.
       - name: Generate settings.xml
+        env:
+          SERVER_CENTRAL: ${{ secrets.MAVEN_SETTINGS_SERVER_CENTRAL }}
         run: |
           mkdir -p ~/.m2
-          echo "<settings>
-                  <servers>
-                    ${{ secrets.MAVEN_SETTINGS_SERVER_CENTRAL }}
-                  </servers>
-                </settings>" > ~/.m2/settings.xml
+          {
+            echo '<settings><servers>'
+            printf '%s\n' "$SERVER_CENTRAL"
+            echo '</servers></settings>'
+          } > ~/.m2/settings.xml
 
       # The release commit already carries this exact version (see AGENTS.md's release
       # process), so this is a consistency check, not the source of truth: if a release
