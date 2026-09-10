@@ -364,6 +364,18 @@ final class Session {
    * spent, so the promise the grant carries and the decision that honours it cannot say
    * different things.
    */
+  /**
+   * Did this shard already fail this unit? Whatever was wrong with that JVM or the state it
+   * left behind is still there, so {@code CoordinatorCore} sends the retry elsewhere while
+   * it can -- a preference, never a withholding.
+   */
+  boolean failedBy(String testId, int shard) {
+    UnitState unit = units.get(testId);
+    return unit != null
+        && unit.records.stream()
+            .anyMatch(record -> record.shard() == shard && record.outcome() == Outcome.FAILED);
+  }
+
   boolean retryableAfterFailure(String testId) {
     return attemptsOf(testId) + 1 < maxAttempts;
   }

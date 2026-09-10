@@ -12,6 +12,8 @@ import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.NackRequest;
+import com.marvinformatics.shard4j.protocol.NextClassRequest;
+import com.marvinformatics.shard4j.protocol.NextClassResponse;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -161,6 +163,49 @@ class RetryBarrierIT {
         .containsExactly(tuple(1, 1, Outcome.FAILED), tuple(2, 0, Outcome.PASSED));
   }
 
+  /**
+   * A requeued failure is claimable by every shard, this one included -- but the shard that
+   * just failed it is the worst next runner for it: whatever was wrong with that JVM, that
+   * machine or the state it left behind is still there, so retrying it there is the attempt
+   * least likely to teach anything. While the shard has any other work the open ask hands
+   * it that instead and leaves the failure for somebody else to pick up.
+   *
+   * <p>One shard on purpose: nobody else can take the unit, so what this proves is the
+   * hold-back itself and not another shard winning a race -- and then the fallback, which
+   * is what keeps the preference from becoming a way to strand a unit.
+   */
+  @Test
+  void givenAFailureAndOtherWorkLeft_whenTheFailingShardAsksAgain_thenTheOtherWorkComesFirst() {
+    String sessionId = UUID.randomUUID().toString();
+    String flakyClass = "com.example.orders.AntiAffinityFlakyIT";
+    String otherClass = "com.example.orders.AntiAffinityOtherIT";
+    String flaky = Ids.method(flakyClass, "flaky");
+    String elsewhere = Ids.method(otherClass, "elsewhere");
+    List<String> census = List.of(flaky, elsewhere);
+    client.register(sessionId, registration(0, census));
+
+    Fence flakyFence = client.claimOne(sessionId, 0, flaky);
+    client.result(sessionId, result(0, flaky, flakyFence, Outcome.FAILED));
+
+    NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
+    assertThat(next.className())
+        .as("the requeued failure is skipped while this shard has anything else to run")
+        .isEqualTo(otherClass);
+    assertThat(next.granted()).extracting(Grant::testId).containsExactly(elsewhere);
+    client.result(
+        sessionId, result(0, elsewhere, next.granted().get(0).fence(), Outcome.PASSED));
+
+    NextClassResponse fallback = client.next(sessionId, new NextClassRequest(0));
+    assertThat(fallback.className())
+        .as("nothing else is left, so idling would be worse than a same-shard retry")
+        .isEqualTo(flakyClass);
+    assertThat(fallback.granted()).extracting(Grant::testId).containsExactly(flaky);
+    client.result(
+        sessionId, result(0, flaky, fallback.granted().get(0).fence(), Outcome.PASSED));
+
+    assertThat(CoverageVerdict.of(client.view(sessionId))).isEqualTo(SessionVerdict.PASSED);
+  }
+
   @Test
   void givenAnAllGreenMainPass_whenTheLastShardArrives_thenEveryShardIsReleased() {
     String sessionId = UUID.randomUUID().toString();
@@ -267,14 +312,21 @@ class RetryBarrierIT {
     // the run was INCOMPLETE however healthy the survivor was. With no pools, PENDING is
     // PENDING: whoever is still alive picks it up.
     assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.RUN);
-    ClaimResponse retry = client.claim(sessionId, new ClaimRequest(0, className, census));
-    assertThat(retry.granted())
-        .as("the survivor takes its own requeued failure and the ghost's abandoned unit")
+    ClaimResponse abandoned = client.claim(sessionId, new ClaimRequest(0, className, census));
+    assertThat(abandoned.granted())
+        .as("the ghost's abandoned unit comes first: it is work this shard has not failed")
         .extracting(Grant::testId)
-        .containsExactlyInAnyOrder(flaky, stranded);
-    for (Grant grant : retry.granted()) {
-      client.result(sessionId, result(0, grant.testId(), grant.fence(), Outcome.PASSED));
-    }
+        .containsExactly(stranded);
+    client.result(
+        sessionId, result(0, stranded, abandoned.granted().get(0).fence(), Outcome.PASSED));
+
+    NextClassResponse ownFailure = client.next(sessionId, new NextClassRequest(0));
+    assertThat(ownFailure.granted())
+        .as("with nothing else left, the survivor takes its own requeued failure back")
+        .extracting(Grant::testId)
+        .containsExactly(flaky);
+    client.result(
+        sessionId, result(0, flaky, ownFailure.granted().get(0).fence(), Outcome.PASSED));
 
     assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.DONE);
     client.depart(sessionId, new DepartRequest(0, 1));

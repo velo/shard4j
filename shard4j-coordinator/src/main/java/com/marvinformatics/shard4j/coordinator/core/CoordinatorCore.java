@@ -175,23 +175,28 @@ public final class CoordinatorCore {
               .flatMap(candidate -> session.claimableUnitsOf(candidate).stream())
               .toList();
       List<ClaimableUnit> ordered = orderFor(claimable);
-      List<Grant> granted = grantCapped(session, request.shard(), ordered, now);
+      // "A requeued failure is claimable right now" is this endpoint's contract, so the
+      // hold-back may reorder a claim, never empty it.
+      List<Grant> granted = grantCapped(session, request.shard(), ordered, now, true);
+      if (granted.isEmpty()) {
+        granted = grantCapped(session, request.shard(), ordered, now, false);
+      }
       joinLogged(sessionId, session, request.shard(), now);
       return new ClaimResponse(granted);
     }
   }
 
   /**
-   * The open ask -- "what do I run next?" -- which is where cross-class slowest-first
-   * actually lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class
-   * of the top-ranked unit is the answer, and that class's first capped batch is leased in
-   * the same locked breath so a named class is never an empty promise. The pool arrives
-   * already parsed, so ranking it costs no id surgery. Ranking whole units
-   * rather than class aggregates means the fixed unit rules extend across classes for
-   * free: a class holding a no-history unit outranks every fully-measured class, in the
-   * pinned hash order of its unknowns, and known classes follow by their slowest remaining
-   * unit. The shard drains the named class through the per-class claim before asking
-   * again, which is what keeps {@code @BeforeAll} a once-per-class cost.
+   * The open ask -- "what do I run next?" -- which is where cross-class ordering actually
+   * lives: the whole claimable pool is ranked by {@link ClaimOrdering}, the class of the
+   * top-ranked unit is the answer, and that class's first capped batch is leased in the
+   * same locked breath so a named class is never an empty promise. The shard drains the
+   * named class through the per-class claim before asking again, which is what keeps
+   * {@code @BeforeAll} a once-per-class cost.
+   *
+   * <p>Two passes: the first holds back units this shard has already failed, leaving its
+   * own failure for somebody else; the second, reached only when the first found nothing
+   * at all, drops that preference rather than strand a retry on the last shard standing.
    */
   public NextClassResponse nextClass(String sessionId, NextClassRequest request) {
     synchronized (writeLock) {
@@ -204,47 +209,64 @@ public final class CoordinatorCore {
         session.touch(now);
         return new NextClassResponse(null, List.of());
       }
-      List<ClaimableUnit> ordered = orderFor(session.claimable());
-      Set<String> triedClasses = new LinkedHashSet<>();
-      for (ClaimableUnit top : ordered) {
-        String className = top.className();
-        if (!triedClasses.add(className)) {
-          continue;
-        }
-        List<ClaimableUnit> inChosenClass =
-            ordered.stream().filter(unit -> className.equals(unit.className())).toList();
-        List<Grant> granted =
-            grantCapped(session, request.shard(), inChosenClass, now);
-        if (!granted.isEmpty()) {
-          joinLogged(sessionId, session, request.shard(), now);
-          return new NextClassResponse(className, granted);
-        }
-        // Everything in this class is capped for this shard right now: its share of the
-        // class's invocations is taken and the rest is held for shards still working or
-        // still arriving. The next class in the schedule may still have work for it.
+      NextClassResponse answer = nameClass(sessionId, session, request.shard(), now, true);
+      if (answer == null) {
+        // Nothing left but this shard's own failures: retrying one beats idling.
+        answer = nameClass(sessionId, session, request.shard(), now, false);
       }
-      // The empty answer is a commitment: the shard's pull loop stops on it, so it is
-      // remembered -- the fair-share cap must never again hold anything back for a shard
-      // that will not ask.
+      if (answer != null) {
+        return answer;
+      }
+      // The empty answer is a commitment -- the pull loop stops on it -- so it is
+      // remembered: never hold a share back for a shard that will not ask again.
       session.markExhausted(request.shard());
       joinLogged(sessionId, session, request.shard(), now);
       return new NextClassResponse(null, List.of());
     }
   }
 
+  /** One pass over the ranked pool: the top class that yields a grant, or null if none. */
+  private NextClassResponse nameClass(
+      String sessionId, Session session, int shard, Instant now, boolean deferOwnFailures) {
+    List<ClaimableUnit> ordered = orderFor(session.claimable());
+    Set<String> triedClasses = new LinkedHashSet<>();
+    for (ClaimableUnit top : ordered) {
+      String className = top.className();
+      if (!triedClasses.add(className)) {
+        continue;
+      }
+      List<ClaimableUnit> inChosenClass =
+          ordered.stream().filter(unit -> className.equals(unit.className())).toList();
+      List<Grant> granted = grantCapped(session, shard, inChosenClass, now, deferOwnFailures);
+      if (!granted.isEmpty()) {
+        joinLogged(sessionId, session, shard, now);
+        return new NextClassResponse(className, granted);
+      }
+      // Held back for this shard right now: a capped share, or a failure it owns.
+    }
+    return null;
+  }
+
   /**
    * Leases the capped prefix of an already-ordered claimable list. Whole units lease
-   * freely, exactly as before distribution existed; expanded invocation units are
-   * additionally held to the method's fair-share allowance, so one fast asker cannot take
-   * a template whose spreading is the entire point of expanding it.
+   * freely; expanded invocation units are held to the method's fair-share allowance, so one
+   * fast asker cannot take a template whose spreading is the point of expanding it.
+   * {@code deferOwnFailures} adds the retry hold-back of {@link Session#failedBy}.
    */
   private List<Grant> grantCapped(
-      Session session, int shard, List<ClaimableUnit> ordered, Instant now) {
+      Session session,
+      int shard,
+      List<ClaimableUnit> ordered,
+      Instant now,
+      boolean deferOwnFailures) {
     List<Grant> granted = new ArrayList<>();
     Map<String, Integer> allowanceLeft = new HashMap<>();
     for (ClaimableUnit unit : ordered) {
       if (granted.size() >= maxClaimBatch) {
         break;
+      }
+      if (deferOwnFailures && session.failedBy(unit.id(), shard)) {
+        continue;
       }
       if (unit.invocation() != null) {
         int left =

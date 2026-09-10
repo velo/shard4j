@@ -25,10 +25,11 @@ import org.testcontainers.containers.GenericContainer;
 
 /**
  * The open ask, end to end: the coordinator -- not the shard -- decides which class runs
- * next, by the same unit rules that already govern order inside a class. Known classes
- * are handed out by their slowest remaining unit; a class holding a no-history unit
- * outranks every fully-measured class, in the pinned hash order of its unknowns; and the
- * named class arrives with its first batch of leases so it is never an empty promise.
+ * next. Known classes are handed out by their measured remaining total, since a class is
+ * what one runner drains; a class holding a no-history unit outranks every fully-measured
+ * class, in the pinned hash order of its unknowns; inside the named class the order is
+ * still slowest unit first; and the named class arrives with its first batch of leases so
+ * it is never an empty promise.
  */
 class NextClassIT {
 
