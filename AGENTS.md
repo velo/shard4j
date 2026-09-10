@@ -249,3 +249,20 @@ major is a decision someone has to make on purpose.
 - Comments explain *why*, not what the next line does.
 - Use imports; never a fully-qualified class name in code.
 - Single-line commit messages, no co-author trailers, signed (`git commit -s -S`).
+
+## Releasing
+
+1. On `main`, bump every module's `<version>` from `X.Y.Z-SNAPSHOT` to `X.Y.Z` and
+   commit as `Release X.Y.Z`.
+2. Bump every module's `<version>` to the next `X.Y.(Z+1)-SNAPSHOT` and commit as
+   `Prepare next development iteration X.Y.(Z+1)-SNAPSHOT`.
+3. Push `main`, then create a GitHub Release with tag `vX.Y.Z` pointing at the
+   `Release X.Y.Z` commit. That `release: created` event is what `release.yml`
+   listens for; it checks out the tag, re-asserts the version from the tag name, and
+   runs `mvn clean deploy -Prelease` -- the profile that attaches sources, javadoc
+   and GPG signatures and publishes through the Central Publishing Portal.
+   `build.yml`'s own `tags: v*` trigger builds the same tag separately, as an
+   ordinary verification build.
+4. Nothing here deploys a SNAPSHOT: the `release` profile only ever runs from a
+   GitHub Release, and `main` always carries a `-SNAPSHOT` version except for the
+   moment the `Release X.Y.Z` commit is at its tip.
