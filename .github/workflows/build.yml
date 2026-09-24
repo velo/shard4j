@@ -108,6 +108,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
     steps:
       - uses: actions/checkout@v7
 
@@ -120,11 +125,19 @@ jobs:
             25
           cache: maven
 
-      - name: Build the coordinator app jar
-        run: mvn -B -ntp -DskipTests package
-
       - name: Build the image
-        run: docker build -t shard4j-coordinator-ci shard4j-coordinator
+        run: mvn -B -ntp -DskipTests package jib:dockerBuild -Djib.to.image=shard4j-coordinator-ci
+
+      - name: Check every platform is in the image index
+        run: |
+          mvn -B -ntp -DskipTests package jib:build -Djib.to.image=localhost:5000/shard4j-coordinator:ci \
+            -Djib.allowInsecureRegistries=true
+          platforms=$(docker buildx imagetools inspect localhost:5000/shard4j-coordinator:ci \
+            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')
+          echo "platforms: $platforms"
+          for p in linux/amd64 linux/arm64 linux/ppc64le linux/s390x; do
+            case " $platforms " in *" $p "*) ;; *) echo "missing $p" >&2; exit 1 ;; esac
+          done
 
       - name: Smoke test the image
         run: |
@@ -167,13 +180,11 @@ jobs:
           echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
           IMAGE=ghcr.io/${{ github.repository }}
           VERSION=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
-          docker tag shard4j-coordinator-ci "$IMAGE:$VERSION"
-          docker push "$IMAGE:$VERSION"
+          tags=()
           if [ '${{ github.ref }}' = 'refs/heads/main' ]; then
-            docker tag shard4j-coordinator-ci "$IMAGE:sha-${GITHUB_SHA::12}"
-            docker push "$IMAGE:sha-${GITHUB_SHA::12}"
+            tags=(-Djib.to.tags="sha-${GITHUB_SHA::12}")
           fi
           if [ '${{ github.ref_type }}' = 'tag' ]; then
-            docker tag shard4j-coordinator-ci "$IMAGE:latest"
-            docker push "$IMAGE:latest"
+            tags=(-Djib.to.tags=latest)
           fi
+          mvn -B -ntp -DskipTests package jib:build -Djib.to.image="$IMAGE:$VERSION" "${tags[@]}"
