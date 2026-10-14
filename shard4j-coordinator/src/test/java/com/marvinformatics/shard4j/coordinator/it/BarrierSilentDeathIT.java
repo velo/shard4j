@@ -72,7 +72,7 @@ class BarrierSilentDeathIT {
     Fence flakyFence = client.claimOne(sessionId, 0, flaky);
     client.result(
         sessionId,
-        new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null));
+        new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null, null));
 
     // Its own failure requeued the moment it was reported, so there is work to take and
     // no barrier to wait behind: the retry pool is no longer gated by a pass.
@@ -92,7 +92,7 @@ class BarrierSilentDeathIT {
             1_200,
             false,
             null,
-            null));
+            null, null));
 
     // Nothing else is claimable yet -- the dead shard still nominally holds its unit --
     // so the survivor is told to wait, and told how long that can last.
@@ -121,7 +121,7 @@ class BarrierSilentDeathIT {
             800,
             false,
             null,
-            null));
+            null, null));
 
     assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
         .isEqualTo(BarrierResponse.Action.DONE);

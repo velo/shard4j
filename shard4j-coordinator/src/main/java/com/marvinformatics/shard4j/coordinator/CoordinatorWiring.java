@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.coordinator;
 
 import com.marvinformatics.shard4j.coordinator.core.CoordinatorCore;
+import com.marvinformatics.shard4j.coordinator.stats.StatsStore;
 import com.marvinformatics.shard4j.coordinator.storage.DataDirectory;
 import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
@@ -43,6 +44,11 @@ public class CoordinatorWiring {
     return new HistoryLog(dataDirectory.historyDir());
   }
 
+  @Bean(destroyMethod = "close")
+  public StatsStore statsStore(DataDirectory dataDirectory) {
+    return StatsStore.open(dataDirectory.tenantDir().resolve("stats.db"));
+  }
+
   @Bean
   public DurationStore durationStore(
       DataDirectory dataDirectory, HistoryLog historyLog, CoordinatorSettings settings) {
@@ -68,16 +74,19 @@ public class CoordinatorWiring {
       DataDirectory dataDirectory,
       SessionLog sessionLog,
       HistoryLog historyLog,
+      StatsStore statsStore,
       DurationStore durationStore,
       CoordinatorSettings settings) {
     Clock clock = Clock.systemUTC();
     Instant now = clock.instant();
     sessionLog.prune(settings.gcIdle(), now);
     historyLog.prune(settings.historyRetention(), now);
+    statsStore.prune(settings.historyRetention(), now);
     CoordinatorCore core =
         CoordinatorCore.builder()
             .sessionLog(sessionLog)
             .historyLog(historyLog)
+            .stats(statsStore)
             .durations(durationStore)
             .clock(clock)
             .tenantKey(settings.tenantKey())
@@ -101,6 +110,7 @@ public class CoordinatorWiring {
   public ScheduledExecutorService maintenanceScheduler(
       SessionLog sessionLog,
       HistoryLog historyLog,
+      StatsStore statsStore,
       DurationStore durationStore,
       CoordinatorCore core,
       CoordinatorSettings settings) {
@@ -117,6 +127,7 @@ public class CoordinatorWiring {
             Instant now = Clock.systemUTC().instant();
             sessionLog.prune(settings.gcIdle(), now);
             historyLog.prune(settings.historyRetention(), now);
+            statsStore.prune(settings.historyRetention(), now);
             core.gcIdleSessions();
           } catch (RuntimeException e) {
             log.warn("Scheduled maintenance failed; will retry next cycle: {}", e.toString());

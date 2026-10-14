@@ -14,6 +14,7 @@ import java.util.List;
  *
  * @param reason required and non-empty for SKIPPED and ABORTED
  * @param invocations present only for a template unit
+ * @param failure present only for a FAILED unit, absent from engines that predate it
  */
 public record ResultRequest(
     int shard,
@@ -23,4 +24,5 @@ public record ResultRequest(
     long durationMs,
     boolean firstOnShard,
     String reason,
-    List<InvocationRecord> invocations) {}
+    List<InvocationRecord> invocations,
+    Failure failure) {}

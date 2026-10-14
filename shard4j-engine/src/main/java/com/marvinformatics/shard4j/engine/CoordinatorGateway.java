@@ -164,7 +164,8 @@ class CoordinatorGateway {
             result.durationMs(),
             firstOnShard,
             result.reason(),
-            result.invocations());
+            result.invocations(),
+            result.failure());
     try {
       withSession(
           () -> {

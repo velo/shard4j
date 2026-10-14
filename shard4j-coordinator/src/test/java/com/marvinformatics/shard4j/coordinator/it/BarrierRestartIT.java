@@ -58,11 +58,11 @@ class BarrierRestartIT {
       Fence mineFence = client.claimOne(sessionId, 0, mine);
       client.result(
           sessionId,
-          new ResultRequest(0, mine, mineFence, Outcome.PASSED, 900, false, null, null));
+          new ResultRequest(0, mine, mineFence, Outcome.PASSED, 900, false, null, null, null));
       Fence flakyFence = client.claimOne(sessionId, 0, flaky);
       client.result(
           sessionId,
-          new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 700, false, null, null));
+          new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 700, false, null, null, null));
       // Its own failure is back on the queue, so there is work to take rather than a
       // barrier to wait behind. What this test is really about starts after the kill.
       assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
@@ -71,7 +71,7 @@ class BarrierRestartIT {
       Fence yoursFence = client.claimOne(sessionId, 1, yours);
       client.result(
           sessionId,
-          new ResultRequest(1, yours, yoursFence, Outcome.PASSED, 800, false, null, null));
+          new ResultRequest(1, yours, yoursFence, Outcome.PASSED, 800, false, null, null, null));
       // Two waiters for one unit of retry work: shard 1 is released.
       assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
           .isEqualTo(BarrierResponse.Action.DONE);
@@ -110,7 +110,7 @@ class BarrierRestartIT {
               750,
               false,
               null,
-              null));
+              null, null));
 
       SessionView view = client.view(sessionId);
       assertThat(

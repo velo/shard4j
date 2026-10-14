@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
+import com.marvinformatics.shard4j.protocol.Failure;
 import com.marvinformatics.shard4j.protocol.Grant;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
@@ -88,13 +89,13 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     String effective = orUnexplained(reason, "skipped");
     String wireId = wireIdOf(descriptor);
     if (leases.containsKey(wireId)) {
-      finalize(wireId, Outcome.SKIPPED, 0, effective, invocationsByUnit.get(wireId));
+      finalize(wireId, Outcome.SKIPPED, 0, effective, null, invocationsByUnit.get(wireId));
     } else if (isInvocation(descriptor)) {
-      recordInvocation(descriptor, Outcome.SKIPPED, 0, effective);
+      recordInvocation(descriptor, Outcome.SKIPPED, 0, effective, null);
     } else {
       // A skipped container emits no events for its children at all; the units beneath it
       // must still leave LEASED, so the container's reason lands on each of them.
-      fillUnitsBeneath(wireId, Outcome.SKIPPED, prefixed(descriptor, effective));
+      fillUnitsBeneath(wireId, Outcome.SKIPPED, prefixed(descriptor, effective), null);
     }
     if (forward(descriptor)) {
       downstream.executionSkipped(descriptor, reason);
@@ -115,7 +116,8 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       finalizeUnit(descriptor, wireId, result, durationMs);
       explained = Set.of(wireId);
     } else if (isInvocation(descriptor)) {
-      recordInvocation(descriptor, outcomeOf(result), durationMs, messageOf(result, null));
+      recordInvocation(
+          descriptor, outcomeOf(result), durationMs, messageOf(result, null), failureOf(result));
       String template = ExecutionIdentity.leaseId(descriptor).value();
       explained = leases.containsKey(template) ? Set.of(template) : Set.of();
     } else if (result.getStatus() != TestExecutionResult.Status.SUCCESSFUL) {
@@ -126,7 +128,10 @@ final class UnitOutcomeListener implements EngineExecutionListener {
           result.getStatus() == TestExecutionResult.Status.ABORTED ? Outcome.ABORTED : Outcome.FAILED;
       explained =
           fillUnitsBeneath(
-              wireId, outcome, prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))));
+              wireId,
+              outcome,
+              prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))),
+              failureOf(result));
     } else {
       explained = Set.of();
     }
@@ -187,13 +192,20 @@ final class UnitOutcomeListener implements EngineExecutionListener {
           outcome,
           durationMs,
           messageOf(result, outcome == Outcome.ABORTED ? "assumption failed" : null),
+          failureOf(result),
           invocations);
       return;
     }
     // A successful template container says nothing about its rows: Jupiter does not fail
     // the container when an invocation fails, so the aggregate is computed from the
     // invocation records -- the one place the shard knows something the coordinator cannot.
-    finalize(wireId, aggregateOf(invocations), durationMs, firstNonPassedReason(invocations), invocations);
+    finalize(
+        wireId,
+        aggregateOf(invocations),
+        durationMs,
+        firstNonPassedReason(invocations),
+        null,
+        invocations);
   }
 
   private static Outcome aggregateOf(List<InvocationRecord> invocations) {
@@ -224,21 +236,22 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   }
 
   private void recordInvocation(
-      TestDescriptor descriptor, Outcome outcome, long durationMs, String reason) {
+      TestDescriptor descriptor, Outcome outcome, long durationMs, String reason, Failure failure) {
     ExecutionId recordId = ExecutionIdentity.executionId(descriptor);
     String unitId = ExecutionIdentity.leaseId(descriptor).value();
     invocationsByUnit
         .computeIfAbsent(unitId, key -> new ArrayList<>())
-        .add(new InvocationRecord(recordId.value(), outcome, durationMs, reason));
+        .add(new InvocationRecord(recordId.value(), outcome, durationMs, reason, failure));
   }
 
   /** Explains every leased unit under a container that emitted nothing for its children. */
-  private Set<String> fillUnitsBeneath(String containerWireId, Outcome outcome, String reason) {
+  private Set<String> fillUnitsBeneath(
+      String containerWireId, Outcome outcome, String reason, Failure failure) {
     String prefix = containerWireId + "/";
     Set<String> filled = new LinkedHashSet<>();
     for (String unit : leases.keySet()) {
       if (!finalized.containsKey(unit) && unit.startsWith(prefix)) {
-        finalize(unit, outcome, 0, reason, invocationsByUnit.get(unit));
+        finalize(unit, outcome, 0, reason, failure, invocationsByUnit.get(unit));
         filled.add(unit);
       }
     }
@@ -250,6 +263,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       Outcome outcome,
       long durationMs,
       String reason,
+      Failure failure,
       List<InvocationRecord> invocations) {
     if (finalized.containsKey(wireId)) {
       return;
@@ -260,7 +274,8 @@ final class UnitOutcomeListener implements EngineExecutionListener {
             outcome,
             durationMs,
             orUnexplained(reason, needsReason(outcome) ? outcome.name().toLowerCase(Locale.ROOT) : null),
-            invocations == null ? null : List.copyOf(invocations));
+            invocations == null ? null : List.copyOf(invocations),
+            failure);
     finalized.put(wireId, result);
     onUnitComplete.accept(result);
   }
@@ -271,6 +286,13 @@ final class UnitOutcomeListener implements EngineExecutionListener {
       case FAILED -> Outcome.FAILED;
       case ABORTED -> Outcome.ABORTED;
     };
+  }
+
+  /** Only a failure is worth a stack trace; an assumption's abort is a decision, not a fault. */
+  private static Failure failureOf(TestExecutionResult result) {
+    return result.getStatus() == TestExecutionResult.Status.FAILED
+        ? FailureCapture.of(result.getThrowable().orElse(null))
+        : null;
   }
 
   private static boolean needsReason(Outcome outcome) {

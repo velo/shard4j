@@ -60,7 +60,7 @@ class ForgottenSessionIT {
             client
                 .resultRaw(
                     sessionId,
-                    new ResultRequest(0, testId, fence, Outcome.PASSED, 100, false, null, null))
+                    new ResultRequest(0, testId, fence, Outcome.PASSED, 100, false, null, null, null))
                 .status())
         .isEqualTo(404);
     assertThat(

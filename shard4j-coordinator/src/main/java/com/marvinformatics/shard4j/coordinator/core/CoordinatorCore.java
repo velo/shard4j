@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
+import com.marvinformatics.shard4j.coordinator.stats.StatsStore;
 import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
 import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
@@ -57,6 +58,7 @@ public final class CoordinatorCore {
   private final Map<String, Session> sessions = new HashMap<>();
   private final SessionLog sessionLog;
   private final HistoryLog historyLog;
+  private final StatsStore stats;
   private final InvocationDistribution distribution;
   private final Clock clock;
   private final String tenantKey;
@@ -74,6 +76,7 @@ public final class CoordinatorCore {
   private CoordinatorCore(
       SessionLog sessionLog,
       HistoryLog historyLog,
+      StatsStore stats,
       DurationStore durations,
       Clock clock,
       String tenantKey,
@@ -84,6 +87,7 @@ public final class CoordinatorCore {
       Duration gcIdle) {
     this.sessionLog = sessionLog;
     this.historyLog = historyLog;
+    this.stats = stats;
     this.distribution = new InvocationDistribution(durations);
     this.clock = clock;
     this.tenantKey = tenantKey;
@@ -290,10 +294,16 @@ public final class CoordinatorCore {
     return ClaimOrdering.order(claimable, distribution::estimateOf);
   }
 
+  /**
+   * Statistics are written after the lock is released: they are diagnostic, and a slow
+   * disk under them must not stall every other shard's claim.
+   */
   public ResultResponse result(String sessionId, ResultRequest request) {
     validateResult(request);
+    Instant now;
+    int attempt;
     synchronized (writeLock) {
-      Instant now = clock.instant();
+      now = clock.instant();
       Session session = requireSession(sessionId, now);
       sweepSilentShards(sessionId, session, now);
       if (!session.isRegistered(request.testId())) {
@@ -334,7 +344,7 @@ public final class CoordinatorCore {
             observedSpanMs);
       }
       String reason = truncate(request.reason());
-      int attempt = session.attemptsOf(request.testId()) + 1;
+      attempt = session.attemptsOf(request.testId()) + 1;
       sessionLog.append(
           LogRecord.unitCompletion(
               tenantKey,
@@ -358,8 +368,9 @@ public final class CoordinatorCore {
           now);
       appendHistory(sessionId, session.epoch(), request, attempt, reason, now);
       distribution.recordDurations(sessionId, session, request);
-      return new ResultResponse(true, null);
     }
+    stats.record(sessionId, request, attempt, now);
+    return new ResultResponse(true, null);
   }
 
   public NackResponse nack(String sessionId, NackRequest request) {

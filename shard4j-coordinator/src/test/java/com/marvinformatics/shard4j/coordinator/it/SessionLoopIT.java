@@ -84,7 +84,7 @@ class SessionLoopIT {
   }
 
   private static ResultRequest passed(int shard, String testId, Fence fence, long durationMs) {
-    return new ResultRequest(shard, testId, fence, Outcome.PASSED, durationMs, false, null, null);
+    return new ResultRequest(shard, testId, fence, Outcome.PASSED, durationMs, false, null, null, null);
   }
 
   @Test
@@ -127,14 +127,14 @@ class SessionLoopIT {
             false,
             null,
             List.of(
-                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null),
-                new InvocationRecord(Ids.invocation(templateId, 2), Outcome.PASSED, 5_000, null))));
+                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
+                new InvocationRecord(Ids.invocation(templateId, 2), Outcome.PASSED, 5_000, null, null)), null));
 
     String skippedId = Ids.method(GAMMA, "disabledUpstream");
     Fence skippedFence = client.claimOne(sessionId, 1, skippedId);
     client.result(
         sessionId,
-        new ResultRequest(1, skippedId, skippedFence, Outcome.SKIPPED, 5, false, "disabled by annotation", null));
+        new ResultRequest(1, skippedId, skippedFence, Outcome.SKIPPED, 5, false, "disabled by annotation", null, null));
 
     String abortedId = Ids.method(GAMMA, "needsLocalService");
     Fence abortedFence = client.claimOne(sessionId, 1, abortedId);
@@ -147,7 +147,7 @@ class SessionLoopIT {
             40,
             false,
             "assumption failed: local service not running",
-            null));
+            null, null));
 
     SessionView view = client.view(sessionId);
     assertThat(view.registeredCount()).isEqualTo(5);
@@ -204,7 +204,7 @@ class SessionLoopIT {
               2_000,
               false,
               null,
-              null));
+              null, null));
     }
 
     // The third and final attempt: still claimable, but with no budget behind it.
@@ -216,7 +216,7 @@ class SessionLoopIT {
     client.result(
         sessionId,
         new ResultRequest(
-            0, failing, last.granted().get(0).fence(), Outcome.FAILED, 2_000, false, null, null));
+            0, failing, last.granted().get(0).fence(), Outcome.FAILED, 2_000, false, null, null, null));
 
     // Spent: terminally FAILED, and never handed out again however often it is asked for.
     assertThat(client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing))).granted())
@@ -247,14 +247,14 @@ class SessionLoopIT {
     Fence fence = client.claimOne(sessionId, 0, failing);
     client.result(
         sessionId,
-        new ResultRequest(0, failing, fence, Outcome.FAILED, 500, false, null, null));
+        new ResultRequest(0, failing, fence, Outcome.FAILED, 500, false, null, null, null));
     String leased = Ids.method(ALPHA, "second");
     Fence leasedFence = client.claimOne(sessionId, 0, leased);
     String absorbed = Ids.method(GAMMA, "disabledUpstream");
     Fence absorbedFence = client.claimOne(sessionId, 0, absorbed);
     client.result(
         sessionId,
-        new ResultRequest(0, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null));
+        new ResultRequest(0, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null, null));
 
     RegisterResponse rejoined = client.register(sessionId, registration(3, 2));
     assertThat(rejoined.epoch()).isEqualTo(2);
@@ -312,7 +312,7 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse reasonless =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, null, null));
+            new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, null, null, null));
     assertThat(reasonless.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse inconsistentAggregate =
@@ -325,13 +325,13 @@ class SessionLoopIT {
                 10,
                 false,
                 null,
-                List.of(new InvocationRecord(invocationId, Outcome.FAILED, 5, "boom"))));
+                List.of(new InvocationRecord(invocationId, Outcome.FAILED, 5, "boom", null)), null));
     assertThat(inconsistentAggregate.status()).isEqualTo(400);
 
     // Neither rejection consumed the lease: a well-formed report still lands.
     client.result(
         sessionId,
-        new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, "disabled", null));
+        new ResultRequest(0, skipped, fence, Outcome.SKIPPED, 1, false, "disabled", null, null));
     assertThat(client.stateOf(sessionId, skipped)).isEqualTo(TestState.SKIPPED);
   }
 
@@ -358,13 +358,13 @@ class SessionLoopIT {
             false,
             null,
             List.of(
-                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null),
+                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
                 new InvocationRecord(
                     Ids.invocation(templateId, 2),
                     Outcome.SKIPPED,
                     0,
-                    "row disabled in this environment"),
-                new InvocationRecord(Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null))));
+                    "row disabled in this environment", null),
+                new InvocationRecord(Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null, null)), null));
 
     assertThat(client.stateOf(sessionId, templateId)).isEqualTo(TestState.PASSED);
   }
@@ -395,7 +395,7 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse wrongShard =
         client.resultRaw(
             sessionId,
-            new ResultRequest(3, testId, fence, Outcome.PASSED, 10, false, null, null));
+            new ResultRequest(3, testId, fence, Outcome.PASSED, 10, false, null, null, null));
     assertThat(wrongShard.status()).isEqualTo(400);
 
     // The rejection did not consume the lease: the honest report still lands.

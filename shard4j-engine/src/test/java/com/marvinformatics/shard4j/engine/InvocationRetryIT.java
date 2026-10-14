@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.SessionView;
@@ -95,6 +96,29 @@ class InvocationRetryIT {
             });
     long terminal = view.tests().stream().filter(test -> test.state().isAbsorbing()).count();
     assertThat(terminal).isEqualTo(view.registeredCount());
+
+    assertTheFlakeWasRecorded(sessionId);
+  }
+
+  /** The row's real throwable reached the coordinator, and the flake counts as new. */
+  private static void assertTheFlakeWasRecorded(String sessionId) {
+    CoordinatorContainer.StatsApi stats = CoordinatorContainer.statsOf(coordinator);
+    JsonNode report = stats.failures();
+    JsonNode failure = report.get("failures").get(0);
+    assertThat(failure.get("session").asText()).isEqualTo(sessionId);
+    assertThat(failure.get("retried").asBoolean()).isTrue();
+    JsonNode signature = report.get("signatures").get(failure.get("fingerprint").asText());
+    assertThat(signature.get("exceptionClass").asText())
+        .isEqualTo("org.opentest4j.AssertionFailedError");
+    assertThat(signature.get("stackTrace").asText()).contains(FIXTURE + ".rows(");
+
+    JsonNode emerging = stats.emerging(sessionId).get("tests");
+    assertThat(emerging).hasSize(1);
+    assertThat(emerging.get(0).get("test").asText())
+        .isEqualTo(FIXTURE + "#rows(java.lang.String)");
+    assertThat(emerging.get(0).get("retriedAttempts").asInt()).isOne();
+    assertThat(emerging.get(0).get("topFailure").get("message").asText())
+        .isEqualTo("first execution of the flaky row fails");
   }
 
   private static Thread shardThread(

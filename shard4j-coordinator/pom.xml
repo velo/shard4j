@@ -34,6 +34,13 @@
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
 
+    <!-- Failure and stability statistics. An embedded file database because the
+         coordinator is already one process owning one volume; plain JDBC, no pool. -->
+    <dependency>
+      <groupId>org.xerial</groupId>
+      <artifactId>sqlite-jdbc</artifactId>
+    </dependency>
+
     <!-- Compile-time only: constructors, builders and loggers. Provided scope keeps
          it out of the shipped tree. -->
     <dependency>

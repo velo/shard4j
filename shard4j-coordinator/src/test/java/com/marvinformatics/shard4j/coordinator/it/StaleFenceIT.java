@@ -74,7 +74,7 @@ class StaleFenceIT {
     CoordinatorClient.RawResponse zombieWrite =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null));
+            new ResultRequest(0, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null, null));
     assertThat(zombieWrite.status()).isEqualTo(409);
     ResultResponse rejection = zombieWrite.bodyAs(ResultResponse.class);
     assertThat(rejection.accepted()).isFalse();
@@ -101,7 +101,7 @@ class StaleFenceIT {
 
     client.result(
         sessionId,
-        new ResultRequest(1, contested, holderFence, Outcome.PASSED, 5_000, false, null, null));
+        new ResultRequest(1, contested, holderFence, Outcome.PASSED, 5_000, false, null, null, null));
     SessionView finalView = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(finalView, contested)).isEqualTo(TestState.PASSED);
     assertThat(

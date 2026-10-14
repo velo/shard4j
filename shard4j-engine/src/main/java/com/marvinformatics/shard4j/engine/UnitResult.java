@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
+import com.marvinformatics.shard4j.protocol.Failure;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import java.util.List;
@@ -13,10 +14,13 @@ import java.util.List;
  *
  * @param invocations non-null only for a template unit, one record per materialised
  *     invocation with its own duration
+ * @param failure what a FAILED leaf or class setup threw; null for a template, whose rows
+ *     carry their own
  */
 record UnitResult(
     ExecutionId unitId,
     Outcome outcome,
     long durationMs,
     String reason,
-    List<InvocationRecord> invocations) {}
+    List<InvocationRecord> invocations,
+    Failure failure) {}

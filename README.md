@@ -340,6 +340,37 @@ the cap binds only while another registered, live shard may still ask, so a decl
 shard that dies before registering costs nothing -- the last live asker always takes the
 remainder.
 
+## Failure and stability statistics
+
+Every attempt of every unit is recorded, passes included, in a SQLite database beside the
+duration history (`<data dir>/<tenant slug>/stats.db`). A FAILED result also carries what
+the test threw: the exception class, the message and the whole cause chain, capped at
+32 KiB by the engine with the head and the root cause kept. Each distinct failure is stored
+once, keyed by a fingerprint of its exception type and frames. Messages and line numbers
+are ignored, so one timeout recurring across commits groups as one fault.
+
+A unit is **flaky** in a session when it failed and then passed on a retry. A failed attempt
+counts as **retried** when another attempt followed it, and its duration is the **retry
+cost**.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /stats/failures?since=7d[&test=][&limit=100]` | failed executions, newest first, each with a fingerprint; the stack traces come once each in `signatures` |
+| `GET /stats/unstable?since=7d[&sort=retries\|cost\|rate\|failures][&limit=20]` | tests with any failed attempt, worst first, each with its most frequent fault |
+| `GET /stats/emerging?session=<id>[&baseline=14d]` | tests that flaked in that session and in none of the baseline's sessions before it -- what a CI step asks of its own run; `since=` replaces `session=` for a window |
+| `GET /stats/trend?since=30d[&bucket=1d][&test=]` | sessions, flaky sessions, flaky tests, retries and retry cost per bucket, gaps included |
+
+Durations are a count and a unit: `30s`, `5m`, `12h`, `2d`, `1w`, `1M`. `m` is minutes and
+`M` is 30 days. ISO-8601 (`P2D`) also works. A window that reaches past
+`COORDINATOR_HISTORY_RETENTION` is cut to it and answers `retentionLimited: true`. Rows older
+than the retention are pruned hourly.
+
+The statistics are diagnostic, never load-bearing. A failed write is a warning. A database
+that cannot be opened leaves the coordinator scheduling normally, with these endpoints
+answering 503. One case where that happens is the `s390x` image, because the bundled SQLite
+native library does not cover that platform. The database runs in WAL mode, so the data
+directory must be a local or block filesystem: never NFS.
+
 ## Deployment
 
 **This repository contains no deployment configuration, by design.** There is no Helm
@@ -359,6 +390,11 @@ scheduling for one instance: it grants nothing on any cluster, in any cloud, or 
 repository. A holder of the secret plus a live session id can inject results, poison timing
 history and drain a session's queue; they cannot overwrite a recorded result or turn a
 drained session green.
+
+`/stats/*` is never public, even under `COORDINATOR_PUBLIC_READ`. A stack trace can carry
+whatever the failing test held, such as a connection string or a token. Treat the data
+volume as holding test output. A holder of the secret can also inject fabricated failures,
+so treat the flake statistics as exactly as trustworthy as the secret.
 
 `COORDINATOR_SECRETS` is split on commas so rotation can run two values side by side --
 which means **a secret value must not contain a comma**: it would silently become two

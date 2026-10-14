@@ -67,7 +67,7 @@ class RetryBarrierIT {
 
   private static ResultRequest result(
       int shard, String testId, Fence fence, Outcome outcome) {
-    return new ResultRequest(shard, testId, fence, outcome, 1_000, false, null, null);
+    return new ResultRequest(shard, testId, fence, outcome, 1_000, false, null, null, null);
   }
 
   private static BarrierResponse arrive(String sessionId, int shard) {
