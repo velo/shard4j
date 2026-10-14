@@ -6,18 +6,18 @@ import java.io.StringWriter;
 import lombok.experimental.UtilityClass;
 
 /**
- * Renders a test's throwable for the wire. The trace keeps its head and its tail when it
- * has to be cut: the head is where the test failed, the tail is the root cause, and the
- * middle of a deep framework stack is what nobody reads.
+ * Renders a test's throwable for the wire. When the trace has to be cut, it keeps the head (where
+ * the test failed) and the tail (the root cause), and drops the middle of a deep framework stack,
+ * which nobody reads.
  */
 @UtilityClass
 class FailureCapture {
 
-  final int STACK_LIMIT = 32 * 1024;
-  final int MESSAGE_LIMIT = 4 * 1024;
-  private final int TAIL = 8 * 1024;
+  final int STACK_TRACE_MAX_CHARS = 32 * 1024;
+  final int MESSAGE_MAX_CHARS = 4 * 1024;
+  private final int KEPT_TAIL_CHARS = 8 * 1024;
 
-  Failure of(Throwable throwable) {
+  Failure toTruncatedFailure(Throwable throwable) {
     if (throwable == null) {
       return null;
     }
@@ -25,26 +25,26 @@ class FailureCapture {
     throwable.printStackTrace(new PrintWriter(trace));
     return new Failure(
         throwable.getClass().getName(),
-        capped(throwable.getMessage(), MESSAGE_LIMIT),
-        headAndTail(trace.toString(), STACK_LIMIT));
+        truncate(throwable.getMessage(), MESSAGE_MAX_CHARS),
+        elideMiddle(trace.toString(), STACK_TRACE_MAX_CHARS));
   }
 
-  String headAndTail(String text, int limit) {
-    if (text.length() <= limit) {
+  String elideMiddle(String text, int maxCharacters) {
+    if (text.length() <= maxCharacters) {
       return text;
     }
-    int tail = Math.min(TAIL, limit / 4);
-    int head = limit - tail - omitted(text.length()).length();
-    return text.substring(0, head)
-        + omitted(text.length() - head - tail)
-        + text.substring(text.length() - tail);
+    int tailLength = Math.min(KEPT_TAIL_CHARS, maxCharacters / 4);
+    int headLength = maxCharacters - tailLength - formatOmissionMarker(text.length()).length();
+    return text.substring(0, headLength)
+        + formatOmissionMarker(text.length() - headLength - tailLength)
+        + text.substring(text.length() - tailLength);
   }
 
-  private String omitted(int characters) {
-    return "\n\t... " + characters + " characters omitted ...\n";
+  private String formatOmissionMarker(int omittedCharacterCount) {
+    return "\n\t... " + omittedCharacterCount + " characters omitted ...\n";
   }
 
-  private String capped(String text, int limit) {
-    return text == null || text.length() <= limit ? text : text.substring(0, limit);
+  private String truncate(String text, int maxCharacters) {
+    return text == null || text.length() <= maxCharacters ? text : text.substring(0, maxCharacters);
   }
 }

@@ -89,13 +89,13 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     String effective = orUnexplained(reason, "skipped");
     String wireId = wireIdOf(descriptor);
     if (leases.containsKey(wireId)) {
-      finalize(wireId, Outcome.SKIPPED, 0, effective, null, invocationsByUnit.get(wireId));
+      complete(wireId, Verdict.skipped(effective), 0, invocationsByUnit.get(wireId));
     } else if (isInvocation(descriptor)) {
-      recordInvocation(descriptor, Outcome.SKIPPED, 0, effective, null);
+      recordInvocation(descriptor, Verdict.skipped(effective), 0);
     } else {
       // A skipped container emits no events for its children at all; the units beneath it
       // must still leave LEASED, so the container's reason lands on each of them.
-      fillUnitsBeneath(wireId, Outcome.SKIPPED, prefixed(descriptor, effective), null);
+      fillUnitsBeneath(wireId, Verdict.skipped(prefixed(descriptor, effective)));
     }
     if (forward(descriptor)) {
       downstream.executionSkipped(descriptor, reason);
@@ -113,25 +113,19 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     // emitted nothing for its children explains every unit beneath it.
     Set<String> explained;
     if (leases.containsKey(wireId)) {
-      finalizeUnit(descriptor, wireId, result, durationMs);
+      completeUnit(descriptor, wireId, result, durationMs);
       explained = Set.of(wireId);
     } else if (isInvocation(descriptor)) {
-      recordInvocation(
-          descriptor, outcomeOf(result), durationMs, messageOf(result, null), failureOf(result));
+      recordInvocation(descriptor, Verdict.of(result, null), durationMs);
       String template = ExecutionIdentity.leaseId(descriptor).value();
       explained = leases.containsKey(template) ? Set.of(template) : Set.of();
     } else if (result.getStatus() != TestExecutionResult.Status.SUCCESSFUL) {
       // The @BeforeAll shapes: the container ends aborted or failed having emitted nothing
       // for its children, and the abort does not propagate upward -- so this is the only
       // event from which those units can ever be explained.
-      Outcome outcome =
-          result.getStatus() == TestExecutionResult.Status.ABORTED ? Outcome.ABORTED : Outcome.FAILED;
+      Verdict verdict = Verdict.of(result, outcomeOf(result).name().toLowerCase(Locale.ROOT));
       explained =
-          fillUnitsBeneath(
-              wireId,
-              outcome,
-              prefixed(descriptor, messageOf(result, outcome.name().toLowerCase(Locale.ROOT))),
-              failureOf(result));
+          fillUnitsBeneath(wireId, verdict.withReason(prefixed(descriptor, verdict.reason())));
     } else {
       explained = Set.of();
     }
@@ -152,7 +146,7 @@ final class UnitOutcomeListener implements EngineExecutionListener {
    * retryable. One unit out of budget makes the setup failure terminal for the class, and
    * the launcher must see that.
    *
-   * <p>One-directional on purpose: {@link #finalize} has already handed the coordinator the
+   * <p>One-directional on purpose: {@link #complete} has already handed the coordinator the
    * real FAILED, and it must keep doing so -- the coverage verdict counts ABORTED as
    * terminal-OK, so downgrading toward the coordinator would convert a genuine failure into
    * passing coverage.
@@ -180,32 +174,41 @@ final class UnitOutcomeListener implements EngineExecutionListener {
     downstream.reportingEntryPublished(descriptor, entry);
   }
 
-  private void finalizeUnit(
+  private void completeUnit(
       TestDescriptor descriptor, String wireId, TestExecutionResult result, long durationMs) {
     List<InvocationRecord> invocations = invocationsByUnit.get(wireId);
     boolean template =
         "test-template".equals(descriptor.getUniqueId().getLastSegment().getType());
     if (!template || result.getStatus() != TestExecutionResult.Status.SUCCESSFUL) {
-      Outcome outcome = outcomeOf(result);
-      finalize(
-          wireId,
-          outcome,
-          durationMs,
-          messageOf(result, outcome == Outcome.ABORTED ? "assumption failed" : null),
-          failureOf(result),
-          invocations);
+      String absentMeans =
+          result.getStatus() == TestExecutionResult.Status.ABORTED ? "assumption failed" : null;
+      complete(wireId, Verdict.of(result, absentMeans), durationMs, invocations);
       return;
     }
     // A successful template container says nothing about its rows: Jupiter does not fail
     // the container when an invocation fails, so the aggregate is computed from the
     // invocation records -- the one place the shard knows something the coordinator cannot.
-    finalize(
-        wireId,
-        aggregateOf(invocations),
-        durationMs,
-        firstNonPassedReason(invocations),
-        null,
-        invocations);
+    complete(wireId, Verdict.aggregatedFrom(invocations), durationMs, invocations);
+  }
+
+  private record Verdict(Outcome outcome, String reason, Failure failure) {
+
+    static Verdict of(TestExecutionResult result, String absentReasonMeans) {
+      return new Verdict(
+          outcomeOf(result), messageOf(result, absentReasonMeans), captureFailureIfFailed(result));
+    }
+
+    static Verdict skipped(String reason) {
+      return new Verdict(Outcome.SKIPPED, reason, null);
+    }
+
+    static Verdict aggregatedFrom(List<InvocationRecord> invocations) {
+      return new Verdict(aggregateOf(invocations), firstNonPassedReason(invocations), null);
+    }
+
+    Verdict withReason(String replacement) {
+      return new Verdict(outcome, replacement, failure);
+    }
   }
 
   private static Outcome aggregateOf(List<InvocationRecord> invocations) {
@@ -235,47 +238,49 @@ final class UnitOutcomeListener implements EngineExecutionListener {
         .orElse(null);
   }
 
-  private void recordInvocation(
-      TestDescriptor descriptor, Outcome outcome, long durationMs, String reason, Failure failure) {
+  private void recordInvocation(TestDescriptor descriptor, Verdict verdict, long durationMs) {
     ExecutionId recordId = ExecutionIdentity.executionId(descriptor);
     String unitId = ExecutionIdentity.leaseId(descriptor).value();
     invocationsByUnit
         .computeIfAbsent(unitId, key -> new ArrayList<>())
-        .add(new InvocationRecord(recordId.value(), outcome, durationMs, reason, failure));
+        .add(
+            new InvocationRecord(
+                recordId.value(),
+                verdict.outcome(),
+                durationMs,
+                verdict.reason(),
+                verdict.failure()));
   }
 
   /** Explains every leased unit under a container that emitted nothing for its children. */
-  private Set<String> fillUnitsBeneath(
-      String containerWireId, Outcome outcome, String reason, Failure failure) {
+  private Set<String> fillUnitsBeneath(String containerWireId, Verdict verdict) {
     String prefix = containerWireId + "/";
     Set<String> filled = new LinkedHashSet<>();
     for (String unit : leases.keySet()) {
       if (!finalized.containsKey(unit) && unit.startsWith(prefix)) {
-        finalize(unit, outcome, 0, reason, failure, invocationsByUnit.get(unit));
+        complete(unit, verdict, 0, invocationsByUnit.get(unit));
         filled.add(unit);
       }
     }
     return filled;
   }
 
-  private void finalize(
-      String wireId,
-      Outcome outcome,
-      long durationMs,
-      String reason,
-      Failure failure,
-      List<InvocationRecord> invocations) {
+  private void complete(
+      String wireId, Verdict verdict, long durationMs, List<InvocationRecord> invocations) {
     if (finalized.containsKey(wireId)) {
       return;
     }
+    Outcome outcome = verdict.outcome();
     UnitResult result =
         new UnitResult(
             new ExecutionId(wireId),
             outcome,
             durationMs,
-            orUnexplained(reason, needsReason(outcome) ? outcome.name().toLowerCase(Locale.ROOT) : null),
+            orUnexplained(
+                verdict.reason(),
+                needsReason(outcome) ? outcome.name().toLowerCase(Locale.ROOT) : null),
             invocations == null ? null : List.copyOf(invocations),
-            failure);
+            verdict.failure());
     finalized.put(wireId, result);
     onUnitComplete.accept(result);
   }
@@ -289,9 +294,9 @@ final class UnitOutcomeListener implements EngineExecutionListener {
   }
 
   /** Only a failure is worth a stack trace; an assumption's abort is a decision, not a fault. */
-  private static Failure failureOf(TestExecutionResult result) {
-    return result.getStatus() == TestExecutionResult.Status.FAILED
-        ? FailureCapture.of(result.getThrowable().orElse(null))
+  private static Failure captureFailureIfFailed(TestExecutionResult executionResult) {
+    return executionResult.getStatus() == TestExecutionResult.Status.FAILED
+        ? FailureCapture.toTruncatedFailure(executionResult.getThrowable().orElse(null))
         : null;
   }
 

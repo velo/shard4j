@@ -97,27 +97,28 @@ class InvocationRetryIT {
     long terminal = view.tests().stream().filter(test -> test.state().isAbsorbing()).count();
     assertThat(terminal).isEqualTo(view.registeredCount());
 
-    assertTheFlakeWasRecorded(sessionId);
+    assertFlakeStatsHoldStackTraceAndListTestAsEmerging(sessionId);
   }
 
   /** The row's real throwable reached the coordinator, and the flake counts as new. */
-  private static void assertTheFlakeWasRecorded(String sessionId) {
-    CoordinatorContainer.StatsApi stats = CoordinatorContainer.statsOf(coordinator);
-    JsonNode report = stats.failures();
-    JsonNode failure = report.get("failures").get(0);
-    assertThat(failure.get("session").asText()).isEqualTo(sessionId);
-    assertThat(failure.get("retried").asBoolean()).isTrue();
-    JsonNode signature = report.get("signatures").get(failure.get("fingerprint").asText());
-    assertThat(signature.get("exceptionClass").asText())
+  private static void assertFlakeStatsHoldStackTraceAndListTestAsEmerging(String sessionId) {
+    CoordinatorContainer.StatsApi statsApi = CoordinatorContainer.createStatsClient(coordinator);
+    JsonNode failureReport = statsApi.getRecentFailureReport();
+    JsonNode failedAttempt = failureReport.get("failedAttempts").get(0);
+    assertThat(failedAttempt.get("sessionId").asText()).isEqualTo(sessionId);
+    assertThat(failedAttempt.get("retried").asBoolean()).isTrue();
+    JsonNode distinctFailure =
+        failureReport.get("distinctFailures").get(failedAttempt.get("fingerprint").asText());
+    assertThat(distinctFailure.get("exceptionClass").asText())
         .isEqualTo("org.opentest4j.AssertionFailedError");
-    assertThat(signature.get("stackTrace").asText()).contains(FIXTURE + ".rows(");
+    assertThat(distinctFailure.get("stackTrace").asText()).contains(FIXTURE + ".rows(");
 
-    JsonNode emerging = stats.emerging(sessionId).get("tests");
-    assertThat(emerging).hasSize(1);
-    assertThat(emerging.get(0).get("test").asText())
+    JsonNode emergingTests = statsApi.getEmergingFlakesInSession(sessionId).get("tests");
+    assertThat(emergingTests).hasSize(1);
+    assertThat(emergingTests.get(0).get("historyKey").asText())
         .isEqualTo(FIXTURE + "#rows(java.lang.String)");
-    assertThat(emerging.get(0).get("retriedAttempts").asInt()).isOne();
-    assertThat(emerging.get(0).get("topFailure").get("message").asText())
+    assertThat(emergingTests.get(0).get("retriedAttempts").asInt()).isOne();
+    assertThat(emergingTests.get(0).get("mostFrequentFailure").get("message").asText())
         .isEqualTo("first execution of the flaky row fails");
   }
 

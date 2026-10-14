@@ -268,10 +268,13 @@ class InvocationDistributionIT {
             false,
             "assumption failed: staging quota exhausted",
             List.of(
-                new InvocationRecord(Ids.invocation(ASSUMING, 1), Outcome.PASSED, 30_000, null, null),
-                new InvocationRecord(Ids.invocation(ASSUMING, 2), Outcome.PASSED, 45_000, null, null),
                 new InvocationRecord(
-                    Ids.invocation(ASSUMING, 3), Outcome.ABORTED, 0, "assumption failed", null)), null));
+                    Ids.invocation(ASSUMING, 1), Outcome.PASSED, 30_000, null, null),
+                new InvocationRecord(
+                    Ids.invocation(ASSUMING, 2), Outcome.PASSED, 45_000, null, null),
+                new InvocationRecord(
+                    Ids.invocation(ASSUMING, 3), Outcome.ABORTED, 0, "assumption failed", null)),
+            null));
 
     // The aborting row keeps its place, so it still runs the day its assumption holds.
     assertThat(measuredPlanOf(ASSUMING))

@@ -47,13 +47,14 @@ public class ApiExceptionHandler {
     return error(HttpStatus.CONFLICT, e);
   }
 
-  @ExceptionHandler(InvalidQueryException.class)
-  public ResponseEntity<Map<String, String>> invalidQuery(InvalidQueryException e) {
+  @ExceptionHandler(InvalidQueryParameterException.class)
+  public ResponseEntity<Map<String, String>> respondBadRequest(InvalidQueryParameterException e) {
     return error(HttpStatus.BAD_REQUEST, e);
   }
 
   @ExceptionHandler(StatsUnavailableException.class)
-  public ResponseEntity<Map<String, String>> statsUnavailable(StatsUnavailableException e) {
+  public ResponseEntity<Map<String, String>> respondServiceUnavailable(
+      StatsUnavailableException e) {
     return error(HttpStatus.SERVICE_UNAVAILABLE, e);
   }
 

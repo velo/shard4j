@@ -46,7 +46,7 @@ public class CoordinatorWiring {
 
   @Bean(destroyMethod = "close")
   public StatsStore statsStore(DataDirectory dataDirectory) {
-    return StatsStore.open(dataDirectory.tenantDir().resolve("stats.db"));
+    return StatsStore.openOrCreateElseDisabled(dataDirectory.tenantDir().resolve("stats.db"));
   }
 
   @Bean
@@ -79,14 +79,12 @@ public class CoordinatorWiring {
       CoordinatorSettings settings) {
     Clock clock = Clock.systemUTC();
     Instant now = clock.instant();
-    sessionLog.prune(settings.gcIdle(), now);
-    historyLog.prune(settings.historyRetention(), now);
-    statsStore.prune(settings.historyRetention(), now);
+    pruneAll(sessionLog, historyLog, statsStore, settings, now);
     CoordinatorCore core =
         CoordinatorCore.builder()
             .sessionLog(sessionLog)
             .historyLog(historyLog)
-            .stats(statsStore)
+            .attemptRecorder(statsStore)
             .durations(durationStore)
             .clock(clock)
             .tenantKey(settings.tenantKey())
@@ -124,10 +122,7 @@ public class CoordinatorWiring {
     scheduler.scheduleWithFixedDelay(
         () -> {
           try {
-            Instant now = Clock.systemUTC().instant();
-            sessionLog.prune(settings.gcIdle(), now);
-            historyLog.prune(settings.historyRetention(), now);
-            statsStore.prune(settings.historyRetention(), now);
+            pruneAll(sessionLog, historyLog, statsStore, settings, Clock.systemUTC().instant());
             core.gcIdleSessions();
           } catch (RuntimeException e) {
             log.warn("Scheduled maintenance failed; will retry next cycle: {}", e.toString());
@@ -148,6 +143,17 @@ public class CoordinatorWiring {
         30,
         TimeUnit.SECONDS);
     return scheduler;
+  }
+
+  private static void pruneAll(
+      SessionLog sessionLog,
+      HistoryLog historyLog,
+      StatsStore statsStore,
+      CoordinatorSettings settings,
+      Instant now) {
+    sessionLog.prune(settings.gcIdle(), now);
+    historyLog.prune(settings.historyRetention(), now);
+    statsStore.prune(settings.historyRetention(), now);
   }
 
   @Bean

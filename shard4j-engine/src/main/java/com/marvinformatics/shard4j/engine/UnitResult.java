@@ -14,8 +14,6 @@ import java.util.List;
  *
  * @param invocations non-null only for a template unit, one record per materialised
  *     invocation with its own duration
- * @param failure what a FAILED leaf or class setup threw; null for a template, whose rows
- *     carry their own
  */
 record UnitResult(
     ExecutionId unitId,

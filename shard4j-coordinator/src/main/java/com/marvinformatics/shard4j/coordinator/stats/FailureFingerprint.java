@@ -9,11 +9,11 @@ import java.util.regex.Pattern;
 import lombok.experimental.UtilityClass;
 
 /**
- * Groups failures that are the same fault. The message is left out because it routinely
- * carries a timestamp, a port or a generated id; line numbers are left out because they
- * move with every unrelated edit to the file. What stays is the exception type and the
- * frames that led to it, cause chain included -- the root cause is often the only line
- * that tells two otherwise identical timeouts apart.
+ * Groups failures that are the same fault. The message is left out because it usually holds a
+ * timestamp, a port or a generated id. Line numbers are left out because they change with every
+ * unrelated edit to the file. What stays is the exception type and the frames that led to it, cause
+ * chain included: the root cause is often the only line that tells two otherwise identical timeouts
+ * apart.
  *
  * <p>For example, these two traces share a fingerprint:
  *
@@ -32,29 +32,34 @@ public class FailureFingerprint {
 
   private final int FRAMES_PER_THROWABLE = 20;
   private final Pattern SOURCE_LOCATION = Pattern.compile("\\([^)]*\\)$");
-  private final Pattern LAMBDA = Pattern.compile("\\$\\$Lambda[^.(]*");
+  private final Pattern LAMBDA_CLASS_SUFFIX = Pattern.compile("\\$\\$Lambda[^.(]*");
   private final Pattern HIDDEN_CLASS_ADDRESS = Pattern.compile("/0x[0-9a-f]+");
-  private final Pattern CAUSE = Pattern.compile("^(Caused by|Suppressed): ([^:\\s]+).*");
+  private final Pattern NESTED_THROWABLE_HEADER =
+      Pattern.compile("^(Caused by|Suppressed): ([^:\\s]+).*");
 
-  public String of(String exceptionClass, String stackTrace) {
-    StringBuilder canonical = new StringBuilder(exceptionClass).append('\n');
-    int frames = 0;
-    for (String raw : stackTrace.split("\n")) {
-      String line = raw.strip();
-      Matcher cause = CAUSE.matcher(line);
-      if (cause.matches()) {
-        canonical.append(cause.group(1)).append(' ').append(cause.group(2)).append('\n');
-        frames = 0;
-      } else if (line.startsWith("at ") && frames++ < FRAMES_PER_THROWABLE) {
+  public String hashNormalizedTrace(String exceptionClass, String stackTrace) {
+    StringBuilder canonicalTrace = new StringBuilder(exceptionClass).append('\n');
+    int framesSeenInThrowable = 0;
+    for (String rawLine : stackTrace.split("\n")) {
+      String line = rawLine.strip();
+      Matcher causeHeaderMatch = NESTED_THROWABLE_HEADER.matcher(line);
+      if (causeHeaderMatch.matches()) {
+        canonicalTrace
+            .append(causeHeaderMatch.group(1))
+            .append(' ')
+            .append(causeHeaderMatch.group(2))
+            .append('\n');
+        framesSeenInThrowable = 0;
+      } else if (line.startsWith("at ") && framesSeenInThrowable++ < FRAMES_PER_THROWABLE) {
         String frame = SOURCE_LOCATION.matcher(line).replaceAll("");
-        frame = LAMBDA.matcher(frame).replaceAll(Matcher.quoteReplacement("$$Lambda"));
-        canonical.append(HIDDEN_CLASS_ADDRESS.matcher(frame).replaceAll("")).append('\n');
+        frame = LAMBDA_CLASS_SUFFIX.matcher(frame).replaceAll(Matcher.quoteReplacement("$$Lambda"));
+        canonicalTrace.append(HIDDEN_CLASS_ADDRESS.matcher(frame).replaceAll("")).append('\n');
       }
     }
-    return sha256(canonical.toString());
+    return hashToSha256HexPrefix(canonicalTrace.toString());
   }
 
-  private String sha256(String text) {
+  private String hashToSha256HexPrefix(String text) {
     try {
       byte[] digest =
           MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));

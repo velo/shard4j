@@ -84,7 +84,8 @@ class SessionLoopIT {
   }
 
   private static ResultRequest passed(int shard, String testId, Fence fence, long durationMs) {
-    return new ResultRequest(shard, testId, fence, Outcome.PASSED, durationMs, false, null, null, null);
+    return new ResultRequest(
+        shard, testId, fence, Outcome.PASSED, durationMs, false, null, null, null);
   }
 
   @Test
@@ -119,7 +120,8 @@ class SessionLoopIT {
     Fence templateFence = client.claimOne(sessionId, 1, templateId);
     client.result(
         sessionId,
-        new ResultRequest(1,
+        new ResultRequest(
+            1,
             templateId,
             templateFence,
             Outcome.PASSED,
@@ -127,27 +129,41 @@ class SessionLoopIT {
             false,
             null,
             List.of(
-                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
-                new InvocationRecord(Ids.invocation(templateId, 2), Outcome.PASSED, 5_000, null, null)), null));
+                new InvocationRecord(
+                    Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
+                new InvocationRecord(
+                    Ids.invocation(templateId, 2), Outcome.PASSED, 5_000, null, null)),
+            null));
 
     String skippedId = Ids.method(GAMMA, "disabledUpstream");
     Fence skippedFence = client.claimOne(sessionId, 1, skippedId);
     client.result(
         sessionId,
-        new ResultRequest(1, skippedId, skippedFence, Outcome.SKIPPED, 5, false, "disabled by annotation", null, null));
+        new ResultRequest(
+            1,
+            skippedId,
+            skippedFence,
+            Outcome.SKIPPED,
+            5,
+            false,
+            "disabled by annotation",
+            null,
+            null));
 
     String abortedId = Ids.method(GAMMA, "needsLocalService");
     Fence abortedFence = client.claimOne(sessionId, 1, abortedId);
     client.result(
         sessionId,
-        new ResultRequest(1,
+        new ResultRequest(
+            1,
             abortedId,
             abortedFence,
             Outcome.ABORTED,
             40,
             false,
             "assumption failed: local service not running",
-            null, null));
+            null,
+            null));
 
     SessionView view = client.view(sessionId);
     assertThat(view.registeredCount()).isEqualTo(5);
@@ -173,7 +189,9 @@ class SessionLoopIT {
 
     // At-most-once recording: the same lease cannot be written twice.
     CoordinatorClient.RawResponse duplicate =
-        client.resultRaw(sessionId, passed(0, Ids.method(ALPHA, "first"), alphaByShard0.granted().get(0).fence(), 1_500));
+        client.resultRaw(
+            sessionId,
+            passed(0, Ids.method(ALPHA, "first"), alphaByShard0.granted().get(0).fence(), 1_500));
     assertThat(duplicate.status()).isEqualTo(409);
   }
 
@@ -204,7 +222,8 @@ class SessionLoopIT {
               2_000,
               false,
               null,
-              null, null));
+              null,
+              null));
     }
 
     // The third and final attempt: still claimable, but with no budget behind it.
@@ -216,7 +235,15 @@ class SessionLoopIT {
     client.result(
         sessionId,
         new ResultRequest(
-            0, failing, last.granted().get(0).fence(), Outcome.FAILED, 2_000, false, null, null, null));
+            0,
+            failing,
+            last.granted().get(0).fence(),
+            Outcome.FAILED,
+            2_000,
+            false,
+            null,
+            null,
+            null));
 
     // Spent: terminally FAILED, and never handed out again however often it is asked for.
     assertThat(client.claim(sessionId, new ClaimRequest(0, ALPHA, List.of(failing))).granted())
@@ -254,7 +281,8 @@ class SessionLoopIT {
     Fence absorbedFence = client.claimOne(sessionId, 0, absorbed);
     client.result(
         sessionId,
-        new ResultRequest(0, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null, null));
+        new ResultRequest(
+            0, absorbed, absorbedFence, Outcome.SKIPPED, 1, false, "disabled", null, null));
 
     RegisterResponse rejoined = client.register(sessionId, registration(3, 2));
     assertThat(rejoined.epoch()).isEqualTo(2);
@@ -318,14 +346,16 @@ class SessionLoopIT {
     CoordinatorClient.RawResponse inconsistentAggregate =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0,
+            new ResultRequest(
+                0,
                 skipped,
                 fence,
                 Outcome.PASSED,
                 10,
                 false,
                 null,
-                List.of(new InvocationRecord(invocationId, Outcome.FAILED, 5, "boom", null)), null));
+                List.of(new InvocationRecord(invocationId, Outcome.FAILED, 5, "boom", null)),
+                null));
     assertThat(inconsistentAggregate.status()).isEqualTo(400);
 
     // Neither rejection consumed the lease: a well-formed report still lands.
@@ -350,7 +380,8 @@ class SessionLoopIT {
 
     client.result(
         sessionId,
-        new ResultRequest(0,
+        new ResultRequest(
+            0,
             templateId,
             fence,
             Outcome.PASSED,
@@ -358,13 +389,17 @@ class SessionLoopIT {
             false,
             null,
             List.of(
-                new InvocationRecord(Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
+                new InvocationRecord(
+                    Ids.invocation(templateId, 1), Outcome.PASSED, 4_000, null, null),
                 new InvocationRecord(
                     Ids.invocation(templateId, 2),
                     Outcome.SKIPPED,
                     0,
-                    "row disabled in this environment", null),
-                new InvocationRecord(Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null, null)), null));
+                    "row disabled in this environment",
+                    null),
+                new InvocationRecord(
+                    Ids.invocation(templateId, 3), Outcome.PASSED, 3_000, null, null)),
+            null));
 
     assertThat(client.stateOf(sessionId, templateId)).isEqualTo(TestState.PASSED);
   }

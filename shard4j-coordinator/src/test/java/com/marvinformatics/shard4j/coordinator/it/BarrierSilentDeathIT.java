@@ -85,14 +85,16 @@ class BarrierSilentDeathIT {
     assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
     client.result(
         sessionId,
-        new ResultRequest(0,
+        new ResultRequest(
+            0,
             flaky,
             retry.granted().get(0).fence(),
             Outcome.PASSED,
             1_200,
             false,
             null,
-            null, null));
+            null,
+            null));
 
     // Nothing else is claimable yet -- the dead shard still nominally holds its unit --
     // so the survivor is told to wait, and told how long that can last.
@@ -121,7 +123,8 @@ class BarrierSilentDeathIT {
             800,
             false,
             null,
-            null, null));
+            null,
+            null));
 
     assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
         .isEqualTo(BarrierResponse.Action.DONE);

@@ -51,15 +51,18 @@ class RestartReplayIT {
       incarnationBefore = passedFence.incarnation();
       client.result(
           sessionId,
-          new ResultRequest(0, passed, passedFence, Outcome.PASSED, 5_000, false, null, null, null));
+          new ResultRequest(
+              0, passed, passedFence, Outcome.PASSED, 5_000, false, null, null, null));
       Fence failedFence = client.claimOne(sessionId, 0, failed);
       client.result(
           sessionId,
-          new ResultRequest(0, failed, failedFence, Outcome.FAILED, 3_000, false, null, null, null));
+          new ResultRequest(
+              0, failed, failedFence, Outcome.FAILED, 3_000, false, null, null, null));
       Fence skippedFence = client.claimOne(sessionId, 0, skipped);
       client.result(
           sessionId,
-          new ResultRequest(0, skipped, skippedFence, Outcome.SKIPPED, 2, false, "disabled", null, null));
+          new ResultRequest(
+              0, skipped, skippedFence, Outcome.SKIPPED, 2, false, "disabled", null, null));
       client.claimOne(sessionId, 0, leased);
 
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
@@ -184,10 +187,13 @@ class RestartReplayIT {
               false,
               "assumption failed: staging quota exhausted",
               List.of(
-                  new InvocationRecord(Ids.invocation(template, 1), Outcome.PASSED, 20_000, null, null),
+                  new InvocationRecord(
+                      Ids.invocation(template, 1), Outcome.PASSED, 20_000, null, null),
                   new InvocationRecord(
                       Ids.invocation(template, 2), Outcome.ABORTED, 0, "assumption failed", null),
-                  new InvocationRecord(Ids.invocation(template, 3), Outcome.PASSED, 40_000, null, null)), null));
+                  new InvocationRecord(
+                      Ids.invocation(template, 3), Outcome.PASSED, 40_000, null, null)),
+              null));
       first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
     } finally {
       first.stop();

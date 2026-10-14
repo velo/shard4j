@@ -114,8 +114,8 @@ final class CoordinatorClient {
     @RequestLine("GET /{probe}")
     Response probe(@Param("probe") String probe);
 
-    @RequestLine("GET /stats/{endpoint}")
-    Response stats(@Param("endpoint") String endpoint, @QueryMap Map<String, String> query);
+    @RequestLine("GET /stats/{report}")
+    Response statsRaw(@Param("report") String report, @QueryMap Map<String, String> query);
   }
 
   private final Api api;
@@ -200,13 +200,12 @@ final class CoordinatorClient {
     return raw(api.probe(probe));
   }
 
-  RawResponse statsRaw(String endpoint, Map<String, String> query) {
-    return raw(api.stats(endpoint, query));
+  RawResponse getStatsReportRaw(String reportName, Map<String, String> queryParameters) {
+    return raw(api.statsRaw(reportName, queryParameters));
   }
 
-  /** A statistics answer as a tree: those shapes are the coordinator's, not wire types. */
-  JsonNode stats(String endpoint, Map<String, String> query) {
-    RawResponse response = statsRaw(endpoint, query);
+  JsonNode getStatsReportAssertingOk(String reportName, Map<String, String> queryParameters) {
+    RawResponse response = getStatsReportRaw(reportName, queryParameters);
     assertThat(response.status()).as(response.body()).isEqualTo(200);
     return response.bodyAs(JsonNode.class);
   }

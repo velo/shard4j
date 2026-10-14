@@ -66,7 +66,8 @@ class StaleFenceIT {
             sessionId,
             new NackRequest(
                 0,
-                List.of(new NackRequest.NackedLease(contested, zombieFence, "job cancelled", false))));
+                List.of(
+                    new NackRequest.NackedLease(contested, zombieFence, "job cancelled", false))));
     assertThat(nack.released()).containsExactly(contested);
 
     Fence holderFence = client.claimOne(sessionId, 1, contested);
@@ -74,7 +75,8 @@ class StaleFenceIT {
     CoordinatorClient.RawResponse zombieWrite =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null, null));
+            new ResultRequest(
+                0, contested, zombieFence, Outcome.PASSED, 4_000, false, null, null, null));
     assertThat(zombieWrite.status()).isEqualTo(409);
     ResultResponse rejection = zombieWrite.bodyAs(ResultResponse.class);
     assertThat(rejection.accepted()).isFalse();
@@ -95,13 +97,16 @@ class StaleFenceIT {
         client.nack(
             sessionId,
             new NackRequest(
-                0, List.of(new NackRequest.NackedLease(contested, zombieFence, "late teardown", false))));
+                0,
+                List.of(
+                    new NackRequest.NackedLease(contested, zombieFence, "late teardown", false))));
     assertThat(staleNack.released()).isEmpty();
     assertThat(staleNack.rejected()).containsExactly(contested);
 
     client.result(
         sessionId,
-        new ResultRequest(1, contested, holderFence, Outcome.PASSED, 5_000, false, null, null, null));
+        new ResultRequest(
+            1, contested, holderFence, Outcome.PASSED, 5_000, false, null, null, null));
     SessionView finalView = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(finalView, contested)).isEqualTo(TestState.PASSED);
     assertThat(

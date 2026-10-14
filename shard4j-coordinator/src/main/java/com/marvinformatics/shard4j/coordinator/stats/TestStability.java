@@ -3,14 +3,11 @@ package com.marvinformatics.shard4j.coordinator.stats;
 import java.time.Instant;
 
 /**
- * One test's record over a window. A session is flaky for a test when some unit of it
- * failed and then passed on a retry; it failed when a unit's last attempt failed.
- *
- * @param retriedAttempts failed attempts that were followed by another attempt
- * @param retryCostMs the time those attempts burned before having to run again
+ * One test over a window. A session is flaky for it when a unit failed and then passed on a retry,
+ * and failed when a unit's last attempt failed.
  */
 public record TestStability(
-    String test,
+    String historyKey,
     int sessions,
     int flakySessions,
     int failedSessions,
@@ -20,4 +17,4 @@ public record TestStability(
     long retryCostMs,
     double flakeRate,
     Instant lastFailureAt,
-    TopFailure topFailure) {}
+    MostFrequentFailure mostFrequentFailure) {}

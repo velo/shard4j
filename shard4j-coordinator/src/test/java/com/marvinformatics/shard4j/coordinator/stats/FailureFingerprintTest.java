@@ -6,18 +6,19 @@ import org.junit.jupiter.api.Test;
 
 class FailureFingerprintTest {
 
-  private static final String TIMEOUT = "java.net.SocketTimeoutException";
+  private static final String TIMEOUT_EXCEPTION_CLASS = "java.net.SocketTimeoutException";
 
   @Test
-  void givenTheSameFaultOnDifferentLinesAndLambdas_whenFingerprinting_thenTheyMatch() {
-    String before =
+  void
+      givenTwoTimeoutTracesDifferingOnlyInMessageLineNumbersAndLambdaClassNames_whenFingerprinting_thenFingerprintsAreEqual() {
+    String firstRunTrace =
         """
         java.net.SocketTimeoutException: Read timed out after 30001 ms
         \tat com.example.orders.GatewayClient.call(GatewayClient.java:88)
         \tat com.example.orders.CheckoutIT$$Lambda/0x00007f3c4c0a1234.run(Unknown Source)
         \tat com.example.orders.CheckoutIT$$Lambda$14/0x0000000800c03000.run(Unknown Source)
         """;
-    String after =
+    String secondRunTrace =
         """
         java.net.SocketTimeoutException: Read timed out after 30017 ms
         \tat com.example.orders.GatewayClient.call(GatewayClient.java:91)
@@ -25,12 +26,13 @@ class FailureFingerprintTest {
         \tat com.example.orders.CheckoutIT$$Lambda$27/0x0000000800d14000.run(Unknown Source)
         """;
 
-    assertThat(FailureFingerprint.of(TIMEOUT, before)).isEqualTo(FailureFingerprint.of(TIMEOUT, after));
+    assertThat(FailureFingerprint.hashNormalizedTrace(TIMEOUT_EXCEPTION_CLASS, firstRunTrace))
+        .isEqualTo(FailureFingerprint.hashNormalizedTrace(TIMEOUT_EXCEPTION_CLASS, secondRunTrace));
   }
 
   @Test
-  void givenTheSameTopFrameButADifferentRootCause_whenFingerprinting_thenTheyDiffer() {
-    String trace =
+  void givenTracesDifferingOnlyInRootCauseType_whenFingerprinting_thenTheFingerprintsDiffer() {
+    String traceCausedBy =
         """
         java.lang.IllegalStateException: checkout failed
         \tat com.example.orders.Checkout.run(Checkout.java:10)
@@ -38,15 +40,24 @@ class FailureFingerprintTest {
         \tat com.example.orders.Gateway.call(Gateway.java:20)
         """;
 
-    assertThat(FailureFingerprint.of("java.lang.IllegalStateException", trace.formatted(TIMEOUT)))
+    assertThat(
+            FailureFingerprint.hashNormalizedTrace(
+                "java.lang.IllegalStateException",
+                traceCausedBy.formatted(TIMEOUT_EXCEPTION_CLASS)))
         .isNotEqualTo(
-            FailureFingerprint.of(
-                "java.lang.IllegalStateException", trace.formatted("java.net.ConnectException")));
+            FailureFingerprint.hashNormalizedTrace(
+                "java.lang.IllegalStateException",
+                traceCausedBy.formatted("java.net.ConnectException")));
   }
 
   @Test
-  void givenADifferentCallSite_whenFingerprinting_thenTheyDiffer() {
-    assertThat(FailureFingerprint.of(TIMEOUT, "\tat com.example.orders.A.call(A.java:1)"))
-        .isNotEqualTo(FailureFingerprint.of(TIMEOUT, "\tat com.example.orders.B.call(B.java:1)"));
+  void
+      givenTheSameExceptionThrownFromADifferentClass_whenFingerprinting_thenTheFingerprintsDiffer() {
+    assertThat(
+            FailureFingerprint.hashNormalizedTrace(
+                TIMEOUT_EXCEPTION_CLASS, "\tat com.example.orders.A.call(A.java:1)"))
+        .isNotEqualTo(
+            FailureFingerprint.hashNormalizedTrace(
+                TIMEOUT_EXCEPTION_CLASS, "\tat com.example.orders.B.call(B.java:1)"));
   }
 }

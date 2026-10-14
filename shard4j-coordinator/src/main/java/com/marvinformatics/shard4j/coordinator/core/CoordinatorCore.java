@@ -1,6 +1,6 @@
 package com.marvinformatics.shard4j.coordinator.core;
 
-import com.marvinformatics.shard4j.coordinator.stats.StatsStore;
+import com.marvinformatics.shard4j.coordinator.core.AttemptRecorder.Attempt;
 import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
 import com.marvinformatics.shard4j.coordinator.storage.LogRecord;
@@ -58,7 +58,7 @@ public final class CoordinatorCore {
   private final Map<String, Session> sessions = new HashMap<>();
   private final SessionLog sessionLog;
   private final HistoryLog historyLog;
-  private final StatsStore stats;
+  private final AttemptRecorder attemptRecorder;
   private final InvocationDistribution distribution;
   private final Clock clock;
   private final String tenantKey;
@@ -76,7 +76,7 @@ public final class CoordinatorCore {
   private CoordinatorCore(
       SessionLog sessionLog,
       HistoryLog historyLog,
-      StatsStore stats,
+      AttemptRecorder attemptRecorder,
       DurationStore durations,
       Clock clock,
       String tenantKey,
@@ -87,7 +87,7 @@ public final class CoordinatorCore {
       Duration gcIdle) {
     this.sessionLog = sessionLog;
     this.historyLog = historyLog;
-    this.stats = stats;
+    this.attemptRecorder = attemptRecorder;
     this.distribution = new InvocationDistribution(durations);
     this.clock = clock;
     this.tenantKey = tenantKey;
@@ -294,14 +294,11 @@ public final class CoordinatorCore {
     return ClaimOrdering.order(claimable, distribution::estimateOf);
   }
 
-  /**
-   * Statistics are written after the lock is released: they are diagnostic, and a slow
-   * disk under them must not stall every other shard's claim.
-   */
   public ResultResponse result(String sessionId, ResultRequest request) {
     validateResult(request);
     Instant now;
     int attempt;
+    List<Attempt> attempts;
     synchronized (writeLock) {
       now = clock.instant();
       Session session = requireSession(sessionId, now);
@@ -366,10 +363,11 @@ public final class CoordinatorCore {
           request.durationMs(),
           reason,
           now);
-      appendHistory(sessionId, session.epoch(), request, attempt, reason, now);
+      attempts = attemptsOf(request, reason);
+      appendHistory(sessionId, session.epoch(), request, attempt, attempts, now);
       distribution.recordDurations(sessionId, session, request);
     }
-    stats.record(sessionId, request, attempt, now);
+    attemptRecorder.recordAttemptsQuietly(sessionId, request.shard(), attempt, attempts, now);
     return new ResultResponse(true, null);
   }
 
@@ -672,36 +670,64 @@ public final class CoordinatorCore {
     return session;
   }
 
-  private void appendHistory(
-      String sessionId, long epoch, ResultRequest request, int attempt, String reason, Instant now) {
-    historyLog.append(
-        LogRecord.unitCompletion(
-            tenantKey,
-            sessionId,
-            epoch,
+  private static List<Attempt> attemptsOf(ResultRequest request, String reason) {
+    List<Attempt> attempts = new ArrayList<>();
+    attempts.add(
+        new Attempt(
             request.testId(),
-            request.shard(),
-            attempt,
+            AttemptKind.ofLease(request.testId()),
             request.outcome(),
             request.durationMs(),
-            request.firstOnShard(),
             reason,
-            now));
+            request.failure()));
     if (request.invocations() != null) {
       for (InvocationRecord invocation : request.invocations()) {
-        historyLog.append(
-            LogRecord.invocationCompletion(
-                tenantKey,
-                sessionId,
-                epoch,
+        attempts.add(
+            new Attempt(
                 invocation.testId(),
-                request.shard(),
-                attempt,
+                AttemptKind.INVOCATION,
                 invocation.outcome(),
                 invocation.durationMs(),
                 truncate(invocation.reason()),
-                now));
+                invocation.failure()));
       }
+    }
+    return attempts;
+  }
+
+  private void appendHistory(
+      String sessionId,
+      long epoch,
+      ResultRequest request,
+      int attempt,
+      List<Attempt> attempts,
+      Instant now) {
+    for (Attempt row : attempts) {
+      historyLog.append(
+          row.unitKind() == AttemptKind.INVOCATION
+              ? LogRecord.invocationCompletion(
+                  tenantKey,
+                  sessionId,
+                  epoch,
+                  row.testId(),
+                  request.shard(),
+                  attempt,
+                  row.outcome(),
+                  row.durationMs(),
+                  row.reason(),
+                  now)
+              : LogRecord.unitCompletion(
+                  tenantKey,
+                  sessionId,
+                  epoch,
+                  row.testId(),
+                  request.shard(),
+                  attempt,
+                  row.outcome(),
+                  row.durationMs(),
+                  request.firstOnShard(),
+                  row.reason(),
+                  now));
     }
   }
 
@@ -786,9 +812,6 @@ public final class CoordinatorCore {
   }
 
   private static String truncate(String reason) {
-    if (reason == null || reason.length() <= REASON_LIMIT) {
-      return reason;
-    }
-    return reason.substring(0, REASON_LIMIT);
+    return Truncation.truncate(reason, REASON_LIMIT);
   }
 }

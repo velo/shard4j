@@ -108,10 +108,9 @@ class CoordinatorContainer {
   }
 
   /** The failure-statistics surface, read as a tree: its shapes are not wire types. */
-  StatsApi statsOf(GenericContainer<?> container) {
-    ObjectMapper json = JsonMapper.builder().addModule(new JavaTimeModule()).build();
+  StatsApi createStatsClient(GenericContainer<?> container) {
     return Feign.builder()
-        .decoder(new JacksonDecoder(json))
+        .decoder(new JacksonDecoder())
         .requestInterceptor(template -> template.header("Authorization", "Bearer " + SECRET))
         .target(StatsApi.class, urlOf(container));
   }
@@ -119,10 +118,10 @@ class CoordinatorContainer {
   interface StatsApi {
 
     @RequestLine("GET /stats/failures")
-    JsonNode failures();
+    JsonNode getRecentFailureReport();
 
-    @RequestLine("GET /stats/emerging?session={sessionId}")
-    JsonNode emerging(@Param("sessionId") String sessionId);
+    @RequestLine("GET /stats/emerging?sessionId={sessionId}")
+    JsonNode getEmergingFlakesInSession(@Param("sessionId") String sessionId);
   }
 
   /**

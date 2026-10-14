@@ -103,14 +103,16 @@ class BarrierRestartIT {
       assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
       client.result(
           sessionId,
-          new ResultRequest(0,
+          new ResultRequest(
+              0,
               flaky,
               retry.granted().get(0).fence(),
               Outcome.PASSED,
               750,
               false,
               null,
-              null, null));
+              null,
+              null));
 
       SessionView view = client.view(sessionId);
       assertThat(

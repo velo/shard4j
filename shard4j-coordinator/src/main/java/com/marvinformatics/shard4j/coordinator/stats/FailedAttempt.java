@@ -1,24 +1,21 @@
 package com.marvinformatics.shard4j.coordinator.stats;
 
+import com.marvinformatics.shard4j.coordinator.core.AttemptKind;
 import java.time.Instant;
 
 /**
- * One FAILED execution.
- *
- * @param test the method-level history key, shared by every invocation of a template
- * @param retried whether a later attempt of the same unit in the same session followed --
- *     a failure that was retried is the raw material of a flake
- * @param fingerprint keys into the report's signatures; null when the engine sent no trace
+ * One FAILED execution. {@code retried} says a later attempt of the same unit followed; {@code
+ * fingerprint} keys into the report's distinct failures, null when no trace was sent.
  */
 public record FailedAttempt(
-    String session,
+    String sessionId,
     String testId,
-    String test,
-    String kind,
+    String historyKey,
+    AttemptKind unitKind,
     int shard,
-    int attempt,
+    int attemptNumber,
     long durationMs,
     String reason,
-    Instant at,
+    Instant failedAt,
     boolean retried,
     String fingerprint) {}
