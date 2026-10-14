@@ -99,12 +99,13 @@ class LeaseExpiryIT {
     CoordinatorClient.RawResponse lateWrite =
         client.resultRaw(
             sessionId,
-            new ResultRequest(0, testId, deadFence, Outcome.PASSED, 60_000, false, null, null));
+            new ResultRequest(
+                0, testId, deadFence, Outcome.PASSED, 60_000, false, null, null, null));
     assertThat(lateWrite.status()).isEqualTo(409);
 
     client.result(
         sessionId,
-        new ResultRequest(1, testId, liveFence, Outcome.PASSED, 900, false, null, null));
+        new ResultRequest(1, testId, liveFence, Outcome.PASSED, 900, false, null, null, null));
     assertThat(client.stateOf(sessionId, testId)).isEqualTo(TestState.PASSED);
   }
 

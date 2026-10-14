@@ -6,6 +6,7 @@ import com.marvinformatics.shard4j.coordinator.core.StaleEpochException;
 import com.marvinformatics.shard4j.coordinator.core.StaleFenceException;
 import com.marvinformatics.shard4j.coordinator.core.UnknownSessionException;
 import com.marvinformatics.shard4j.coordinator.core.UnregisteredTestException;
+import com.marvinformatics.shard4j.coordinator.stats.StatsUnavailableException;
 import com.marvinformatics.shard4j.protocol.ResultResponse;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -44,6 +45,17 @@ public class ApiExceptionHandler {
   @ExceptionHandler(StaleEpochException.class)
   public ResponseEntity<Map<String, String>> staleEpoch(StaleEpochException e) {
     return error(HttpStatus.CONFLICT, e);
+  }
+
+  @ExceptionHandler(InvalidQueryParameterException.class)
+  public ResponseEntity<Map<String, String>> respondBadRequest(InvalidQueryParameterException e) {
+    return error(HttpStatus.BAD_REQUEST, e);
+  }
+
+  @ExceptionHandler(StatsUnavailableException.class)
+  public ResponseEntity<Map<String, String>> respondServiceUnavailable(
+      StatsUnavailableException e) {
+    return error(HttpStatus.SERVICE_UNAVAILABLE, e);
   }
 
   @ExceptionHandler(StaleFenceException.class)

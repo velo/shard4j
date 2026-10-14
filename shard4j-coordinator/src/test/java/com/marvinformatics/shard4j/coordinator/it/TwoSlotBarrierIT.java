@@ -86,8 +86,16 @@ class TwoSlotBarrierIT {
     Grant firstGrant = firstAsk.granted().get(0);
     client.result(
         sessionId,
-        new ResultRequest(0, firstGrant.testId(), firstGrant.fence(), Outcome.PASSED, 1_000, true,
-            null, null));
+        new ResultRequest(
+            0,
+            firstGrant.testId(),
+            firstGrant.fence(),
+            Outcome.PASSED,
+            1_000,
+            true,
+            null,
+            null,
+            null));
     BarrierResponse oneStillBusy = arrive(sessionId, 1);
     assertThat(oneStillBusy.action()).isEqualTo(BarrierResponse.Action.WAIT);
 
@@ -97,8 +105,16 @@ class TwoSlotBarrierIT {
     Grant secondGrant = secondAsk.granted().get(0);
     client.result(
         sessionId,
-        new ResultRequest(0, secondGrant.testId(), secondGrant.fence(), Outcome.FAILED, 1_000, false,
-            null, null));
+        new ResultRequest(
+            0,
+            secondGrant.testId(),
+            secondGrant.fence(),
+            Outcome.FAILED,
+            1_000,
+            false,
+            null,
+            null,
+            null));
     assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.DONE);
     assertThat(arrive(sessionId, 1).action()).isEqualTo(BarrierResponse.Action.RUN);
 

@@ -83,7 +83,8 @@ class HoldUntilResolvedIT {
     // s1 fails it. The unit requeues, and s2 -- which has been waiting the longest -- is
     // the one told to run.
     client.result(
-        sessionId, new ResultRequest(0, only, first, Outcome.FAILED, 1_000, false, null, null));
+        sessionId,
+        new ResultRequest(0, only, first, Outcome.FAILED, 1_000, false, null, null, null));
     BarrierResponse releasedToRun = client.barrier(sessionId, new BarrierRequest(1, 1));
     assertThat(releasedToRun.action())
         .as("the longest-waiting shard gets first refusal on the requeued unit")
@@ -101,7 +102,8 @@ class HoldUntilResolvedIT {
 
     // s2 passes it. Nothing is outstanding, so both shards are free to finish.
     client.result(
-        sessionId, new ResultRequest(1, only, second, Outcome.PASSED, 1_200, false, null, null));
+        sessionId,
+        new ResultRequest(1, only, second, Outcome.PASSED, 1_200, false, null, null, null));
     assertThat(client.barrier(sessionId, new BarrierRequest(0, 1)).action())
         .isEqualTo(BarrierResponse.Action.DONE);
     assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
@@ -133,7 +135,8 @@ class HoldUntilResolvedIT {
     for (int attempt = 1; attempt <= 2; attempt++) {
       Fence fence = client.claimOne(sessionId, 0, only);
       client.result(
-          sessionId, new ResultRequest(0, only, fence, Outcome.FAILED, 500, false, null, null));
+          sessionId,
+          new ResultRequest(0, only, fence, Outcome.FAILED, 500, false, null, null, null));
     }
     client.claimOne(sessionId, 0, only);
 
@@ -153,7 +156,10 @@ class HoldUntilResolvedIT {
             0,
             List.of(
                 new NackRequest.NackedLease(
-                    only, client.view(sessionId).tests().get(0).lease().fence(), "job deadline", false))));
+                    only,
+                    client.view(sessionId).tests().get(0).lease().fence(),
+                    "job deadline",
+                    false))));
     client.depart(sessionId, new DepartRequest(0, 1));
 
     assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
@@ -163,7 +169,15 @@ class HoldUntilResolvedIT {
     client.result(
         sessionId,
         new ResultRequest(
-            1, only, rescued.granted().get(0).fence(), Outcome.PASSED, 600, false, null, null));
+            1,
+            only,
+            rescued.granted().get(0).fence(),
+            Outcome.PASSED,
+            600,
+            false,
+            null,
+            null,
+            null));
 
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, only)).isEqualTo(TestState.PASSED);

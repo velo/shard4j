@@ -2,6 +2,7 @@ package com.marvinformatics.shard4j.coordinator.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -26,6 +27,7 @@ import com.marvinformatics.shard4j.protocol.TestState;
 import feign.Feign;
 import feign.Headers;
 import feign.Param;
+import feign.QueryMap;
 import feign.RequestLine;
 import feign.Response;
 import feign.Util;
@@ -35,6 +37,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import lombok.SneakyThrows;
 import org.testcontainers.containers.GenericContainer;
 
@@ -110,6 +113,9 @@ final class CoordinatorClient {
 
     @RequestLine("GET /{probe}")
     Response probe(@Param("probe") String probe);
+
+    @RequestLine("GET /stats/{report}")
+    Response statsRaw(@Param("report") String report, @QueryMap Map<String, String> query);
   }
 
   private final Api api;
@@ -192,6 +198,16 @@ final class CoordinatorClient {
 
   RawResponse probe(String probe) {
     return raw(api.probe(probe));
+  }
+
+  RawResponse getStatsReportRaw(String reportName, Map<String, String> queryParameters) {
+    return raw(api.statsRaw(reportName, queryParameters));
+  }
+
+  JsonNode getStatsReportAssertingOk(String reportName, Map<String, String> queryParameters) {
+    RawResponse response = getStatsReportRaw(reportName, queryParameters);
+    assertThat(response.status()).as(response.body()).isEqualTo(200);
+    return response.bodyAs(JsonNode.class);
   }
 
   TestState stateOf(String sessionId, String testId) {

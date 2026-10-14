@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.engine;
 
 import com.marvinformatics.shard4j.protocol.ExecutionId;
+import com.marvinformatics.shard4j.protocol.Failure;
 import com.marvinformatics.shard4j.protocol.InvocationRecord;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import java.util.List;
@@ -19,4 +20,5 @@ record UnitResult(
     Outcome outcome,
     long durationMs,
     String reason,
-    List<InvocationRecord> invocations) {}
+    List<InvocationRecord> invocations,
+    Failure failure) {}

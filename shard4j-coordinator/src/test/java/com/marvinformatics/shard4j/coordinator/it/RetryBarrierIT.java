@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -67,7 +66,7 @@ class RetryBarrierIT {
 
   private static ResultRequest result(
       int shard, String testId, Fence fence, Outcome outcome) {
-    return new ResultRequest(shard, testId, fence, outcome, 1_000, false, null, null);
+    return new ResultRequest(shard, testId, fence, outcome, 1_000, false, null, null, null);
   }
 
   private static BarrierResponse arrive(String sessionId, int shard) {
@@ -331,7 +330,8 @@ class RetryBarrierIT {
     client.nack(
         sessionId,
         new NackRequest(
-            1, List.of(new NackRequest.NackedLease(stranded, strandedFence, "job deadline", false))));
+            1,
+            List.of(new NackRequest.NackedLease(stranded, strandedFence, "job deadline", false))));
     client.depart(sessionId, new DepartRequest(1, 1));
 
     // The departed shard no longer holds the barrier, and the survivor inherits both its

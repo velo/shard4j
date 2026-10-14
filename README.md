@@ -340,6 +340,41 @@ the cap binds only while another registered, live shard may still ask, so a decl
 shard that dies before registering costs nothing -- the last live asker always takes the
 remainder.
 
+## Failure and stability statistics
+
+Every attempt of every unit is saved in a SQLite database beside the duration history
+(`<data dir>/<tenant slug>/stats.db`), passes included. A FAILED result also carries what the
+test threw: the exception class, the message and the whole cause chain. The engine caps this at
+32 KiB and always keeps the head and the root cause.
+
+Each distinct failure is stored once, identified by a fingerprint of its exception type and
+stack frames. Messages and line numbers are ignored, so the same timeout across many commits
+counts as one fault.
+
+A unit is **flaky** in a session when it failed and then passed on a retry. A failed attempt
+counts as **retried** when another attempt followed it, and its duration is the **retry cost**.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /stats/failures?since=7d[&test=][&limit=100]` | failed attempts, newest first, each with a fingerprint; each stack trace appears once in `distinctFailures` |
+| `GET /stats/unstable?since=7d[&sort=retries\|retry-cost\|flake-rate\|failures][&limit=20]` | tests with any failed attempt, worst first, each with its most frequent failure |
+| `GET /stats/emerging?sessionId=<id>[&baseline=14d]` | tests that flaked in that session and in none of the baseline's sessions before it; `since=` replaces `sessionId=` for a window, and an unknown session answers 404 |
+| `GET /stats/trend?since=30d[&bucketSpan=1d][&test=]` | sessions, flaky sessions, flaky tests, retries and retry cost per bucket, empty buckets included |
+
+`test` is a history key (`<FQCN>#<method>(<paramTypes>)`); `/stats/failures` also accepts an
+exact unit id.
+
+Durations use a number and a unit: `30s`, `5m`, `12h`, `2d`, `1w`, `1M`. `m` is minutes and `M`
+is 30 days. ISO-8601 (`P2D`) also works. A window that goes past
+`COORDINATOR_HISTORY_RETENTION` is cut to that limit and answers `retentionLimited: true`. Rows
+older than the retention are deleted every hour.
+
+The statistics are for diagnosis only; scheduling never depends on them. A failed write is a
+warning. If the database cannot be opened, the coordinator still schedules normally and these
+endpoints answer 503. One case where this happens is the `s390x` image, because the bundled
+SQLite native library does not cover that platform. The database uses WAL mode, so the data
+directory must be on a local or block filesystem. Do not use NFS.
+
 ## Deployment
 
 **This repository contains no deployment configuration, by design.** There is no Helm
@@ -359,6 +394,11 @@ scheduling for one instance: it grants nothing on any cluster, in any cloud, or 
 repository. A holder of the secret plus a live session id can inject results, poison timing
 history and drain a session's queue; they cannot overwrite a recorded result or turn a
 drained session green.
+
+`/stats/*` is never public, even when `COORDINATOR_PUBLIC_READ` is set. A stack trace can
+carry whatever the failing test held, such as a connection string or a token, so treat the
+data volume as holding test output. Anyone with the secret could also inject fake failures,
+so trust the flake statistics exactly as much as you trust the secret.
 
 `COORDINATOR_SECRETS` is split on commas so rotation can run two values side by side --
 which means **a secret value must not contain a comma**: it would silently become two

@@ -72,7 +72,7 @@ class BarrierSilentDeathIT {
     Fence flakyFence = client.claimOne(sessionId, 0, flaky);
     client.result(
         sessionId,
-        new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null));
+        new ResultRequest(0, flaky, flakyFence, Outcome.FAILED, 1_000, false, null, null, null));
 
     // Its own failure requeued the moment it was reported, so there is work to take and
     // no barrier to wait behind: the retry pool is no longer gated by a pass.
@@ -85,12 +85,14 @@ class BarrierSilentDeathIT {
     assertThat(retry.granted().get(0).testId()).isEqualTo(flaky);
     client.result(
         sessionId,
-        new ResultRequest(0,
+        new ResultRequest(
+            0,
             flaky,
             retry.granted().get(0).fence(),
             Outcome.PASSED,
             1_200,
             false,
+            null,
             null,
             null));
 
@@ -120,6 +122,7 @@ class BarrierSilentDeathIT {
             Outcome.PASSED,
             800,
             false,
+            null,
             null,
             null));
 

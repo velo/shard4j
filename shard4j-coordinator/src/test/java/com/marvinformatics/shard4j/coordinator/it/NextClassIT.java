@@ -119,7 +119,8 @@ class NextClassIT {
     for (Grant grant : grants) {
       client.result(
           sessionId,
-          new ResultRequest(0, grant.testId(), grant.fence(), Outcome.PASSED, 1_000, false, null, null));
+          new ResultRequest(
+              0, grant.testId(), grant.fence(), Outcome.PASSED, 1_000, false, null, null, null));
     }
   }
 }

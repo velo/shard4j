@@ -1,5 +1,6 @@
 package com.marvinformatics.shard4j.engine;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -104,6 +105,23 @@ class CoordinatorContainer {
 
     @RequestLine("GET /sessions/{sessionId}")
     SessionView view(@Param("sessionId") String sessionId);
+  }
+
+  /** The failure-statistics surface, read as a tree: its shapes are not wire types. */
+  StatsApi createStatsClient(GenericContainer<?> container) {
+    return Feign.builder()
+        .decoder(new JacksonDecoder())
+        .requestInterceptor(template -> template.header("Authorization", "Bearer " + SECRET))
+        .target(StatsApi.class, urlOf(container));
+  }
+
+  interface StatsApi {
+
+    @RequestLine("GET /stats/failures")
+    JsonNode getRecentFailureReport();
+
+    @RequestLine("GET /stats/emerging?sessionId={sessionId}")
+    JsonNode getEmergingFlakesInSession(@Param("sessionId") String sessionId);
   }
 
   /**

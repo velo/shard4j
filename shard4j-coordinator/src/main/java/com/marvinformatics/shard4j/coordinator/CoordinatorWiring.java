@@ -1,6 +1,7 @@
 package com.marvinformatics.shard4j.coordinator;
 
 import com.marvinformatics.shard4j.coordinator.core.CoordinatorCore;
+import com.marvinformatics.shard4j.coordinator.stats.StatsStore;
 import com.marvinformatics.shard4j.coordinator.storage.DataDirectory;
 import com.marvinformatics.shard4j.coordinator.storage.DurationStore;
 import com.marvinformatics.shard4j.coordinator.storage.HistoryLog;
@@ -43,6 +44,11 @@ public class CoordinatorWiring {
     return new HistoryLog(dataDirectory.historyDir());
   }
 
+  @Bean(destroyMethod = "close")
+  public StatsStore statsStore(DataDirectory dataDirectory) {
+    return StatsStore.openOrCreateElseDisabled(dataDirectory.tenantDir().resolve("stats.db"));
+  }
+
   @Bean
   public DurationStore durationStore(
       DataDirectory dataDirectory, HistoryLog historyLog, CoordinatorSettings settings) {
@@ -68,16 +74,17 @@ public class CoordinatorWiring {
       DataDirectory dataDirectory,
       SessionLog sessionLog,
       HistoryLog historyLog,
+      StatsStore statsStore,
       DurationStore durationStore,
       CoordinatorSettings settings) {
     Clock clock = Clock.systemUTC();
     Instant now = clock.instant();
-    sessionLog.prune(settings.gcIdle(), now);
-    historyLog.prune(settings.historyRetention(), now);
+    pruneAll(sessionLog, historyLog, statsStore, settings, now);
     CoordinatorCore core =
         CoordinatorCore.builder()
             .sessionLog(sessionLog)
             .historyLog(historyLog)
+            .attemptRecorder(statsStore)
             .durations(durationStore)
             .clock(clock)
             .tenantKey(settings.tenantKey())
@@ -101,6 +108,7 @@ public class CoordinatorWiring {
   public ScheduledExecutorService maintenanceScheduler(
       SessionLog sessionLog,
       HistoryLog historyLog,
+      StatsStore statsStore,
       DurationStore durationStore,
       CoordinatorCore core,
       CoordinatorSettings settings) {
@@ -114,9 +122,7 @@ public class CoordinatorWiring {
     scheduler.scheduleWithFixedDelay(
         () -> {
           try {
-            Instant now = Clock.systemUTC().instant();
-            sessionLog.prune(settings.gcIdle(), now);
-            historyLog.prune(settings.historyRetention(), now);
+            pruneAll(sessionLog, historyLog, statsStore, settings, Clock.systemUTC().instant());
             core.gcIdleSessions();
           } catch (RuntimeException e) {
             log.warn("Scheduled maintenance failed; will retry next cycle: {}", e.toString());
@@ -137,6 +143,17 @@ public class CoordinatorWiring {
         30,
         TimeUnit.SECONDS);
     return scheduler;
+  }
+
+  private static void pruneAll(
+      SessionLog sessionLog,
+      HistoryLog historyLog,
+      StatsStore statsStore,
+      CoordinatorSettings settings,
+      Instant now) {
+    sessionLog.prune(settings.gcIdle(), now);
+    historyLog.prune(settings.historyRetention(), now);
+    statsStore.prune(settings.historyRetention(), now);
   }
 
   @Bean

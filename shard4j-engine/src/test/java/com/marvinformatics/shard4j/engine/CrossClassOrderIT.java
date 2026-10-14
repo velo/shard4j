@@ -105,7 +105,8 @@ class CrossClassOrderIT {
     for (Grant grant : taken) {
       otherShard.result(
           sessionId,
-          new ResultRequest(1, grant.testId(), grant.fence(), Outcome.PASSED, 50, false, null, null));
+          new ResultRequest(
+              1, grant.testId(), grant.fence(), Outcome.PASSED, 50, false, null, null, null));
     }
 
     ShardConfiguration configuration = configuration(sessionId);

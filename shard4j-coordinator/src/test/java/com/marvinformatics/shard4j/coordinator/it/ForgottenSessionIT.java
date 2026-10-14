@@ -60,7 +60,8 @@ class ForgottenSessionIT {
             client
                 .resultRaw(
                     sessionId,
-                    new ResultRequest(0, testId, fence, Outcome.PASSED, 100, false, null, null))
+                    new ResultRequest(
+                        0, testId, fence, Outcome.PASSED, 100, false, null, null, null))
                 .status())
         .isEqualTo(404);
     assertThat(
@@ -68,7 +69,9 @@ class ForgottenSessionIT {
                 .nackRaw(
                     sessionId,
                     new NackRequest(
-                        0, List.of(new NackRequest.NackedLease(testId, fence, "shutting down", false))))
+                        0,
+                        List.of(
+                            new NackRequest.NackedLease(testId, fence, "shutting down", false))))
                 .status())
         .isEqualTo(404);
     assertThat(

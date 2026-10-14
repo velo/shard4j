@@ -3,6 +3,7 @@ package com.marvinformatics.shard4j.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.marvinformatics.shard4j.protocol.ExecutionId;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.SessionView;
@@ -95,6 +96,30 @@ class InvocationRetryIT {
             });
     long terminal = view.tests().stream().filter(test -> test.state().isAbsorbing()).count();
     assertThat(terminal).isEqualTo(view.registeredCount());
+
+    assertFlakeStatsHoldStackTraceAndListTestAsEmerging(sessionId);
+  }
+
+  /** The row's real throwable reached the coordinator, and the flake counts as new. */
+  private static void assertFlakeStatsHoldStackTraceAndListTestAsEmerging(String sessionId) {
+    CoordinatorContainer.StatsApi statsApi = CoordinatorContainer.createStatsClient(coordinator);
+    JsonNode failureReport = statsApi.getRecentFailureReport();
+    JsonNode failedAttempt = failureReport.get("failedAttempts").get(0);
+    assertThat(failedAttempt.get("sessionId").asText()).isEqualTo(sessionId);
+    assertThat(failedAttempt.get("retried").asBoolean()).isTrue();
+    JsonNode distinctFailure =
+        failureReport.get("distinctFailures").get(failedAttempt.get("fingerprint").asText());
+    assertThat(distinctFailure.get("exceptionClass").asText())
+        .isEqualTo("org.opentest4j.AssertionFailedError");
+    assertThat(distinctFailure.get("stackTrace").asText()).contains(FIXTURE + ".rows(");
+
+    JsonNode emergingTests = statsApi.getEmergingFlakesInSession(sessionId).get("tests");
+    assertThat(emergingTests).hasSize(1);
+    assertThat(emergingTests.get(0).get("historyKey").asText())
+        .isEqualTo(FIXTURE + "#rows(java.lang.String)");
+    assertThat(emergingTests.get(0).get("retriedAttempts").asInt()).isOne();
+    assertThat(emergingTests.get(0).get("mostFrequentFailure").get("message").asText())
+        .isEqualTo("first execution of the flaky row fails");
   }
 
   private static Thread shardThread(
