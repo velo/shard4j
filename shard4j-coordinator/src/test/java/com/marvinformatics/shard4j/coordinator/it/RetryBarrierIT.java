@@ -61,7 +61,7 @@ class RetryBarrierIT {
   }
 
   private static RegisterRequest registration(int shard, List<String> census) {
-    return new RegisterRequest(shard, 1, Map.of(), census, null);
+    return new RegisterRequest(shard, 1, Map.of(), census, null, 3);
   }
 
   private static ResultRequest result(
@@ -507,7 +507,7 @@ class RetryBarrierIT {
 
     // A registration at a higher attempt: the old shards are known-dead, the epoch moves on.
     client.register(
-        sessionId, new RegisterRequest(5, 2, Map.of(), census, null));
+        sessionId, new RegisterRequest(5, 2, Map.of(), census, null, 3));
 
     CoordinatorClient.RawResponse zombiePoll =
         client.barrierRaw(sessionId, new BarrierRequest(0, 1));
@@ -581,6 +581,49 @@ class RetryBarrierIT {
     CoordinatorClient.RawResponse missingPass =
         client.barrierRaw(sessionId, Map.of("shard", 0));
     assertThat(missingPass.status()).isEqualTo(400);
+  }
+
+  @Test
+  void givenASessionCreatedWithOneAttempt_whenAUnitFails_thenTheFailureIsTerminal() {
+    String sessionId = UUID.randomUUID().toString();
+    String className = "com.example.orders.SingleAttemptIT";
+    String flaky = Ids.method(className, "flaky");
+    List<String> census = List.of(flaky);
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, null, 1));
+    // The session keeps the budget it was created with, whatever a later shard asks for.
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, null, 5));
+
+    Fence fence = client.claimOne(sessionId, 0, flaky);
+    client.result(sessionId, result(0, flaky, fence, Outcome.FAILED));
+
+    assertThat(arrive(sessionId, 0).action()).isEqualTo(BarrierResponse.Action.DONE);
+    SessionView view = client.view(sessionId);
+    assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.FAILED);
+    assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
+  }
+
+  @Test
+  void givenARegistrationWithoutMaxAttempts_whenAUnitFails_thenTheFailureIsTerminal() {
+    String sessionId = UUID.randomUUID().toString();
+    String flaky = Ids.method("com.example.orders.LegacyEngineIT", "flaky");
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(flaky), null, null));
+
+    Fence fence = client.claimOne(sessionId, 0, flaky);
+    client.result(sessionId, result(0, flaky, fence, Outcome.FAILED));
+
+    assertThat(CoordinatorClient.stateOf(client.view(sessionId), flaky))
+        .isEqualTo(TestState.FAILED);
+  }
+
+  @Test
+  void givenMaxAttemptsBelowOne_whenRegistering_thenRejected() {
+    String only = Ids.method("com.example.orders.ZeroAttemptsIT", "only");
+    CoordinatorClient.RawResponse response =
+        client.registerRaw(
+            UUID.randomUUID().toString(),
+            new RegisterRequest(0, 1, Map.of(), List.of(only), null, 0));
+    assertThat(response.status()).isEqualTo(400);
+    assertThat(response.body()).contains("maxAttempts");
   }
 
   /**

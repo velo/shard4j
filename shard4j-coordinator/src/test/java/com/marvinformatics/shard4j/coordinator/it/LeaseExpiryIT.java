@@ -59,9 +59,9 @@ class LeaseExpiryIT {
     String testId = Ids.method(CLASS_NAME, "hangs");
     List<String> census = List.of(testId);
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census, null, null));
     client.register(
-        sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
+        sessionId, new RegisterRequest(1, 1, Map.of(), census, null, null));
 
     ClaimResponse silent =
         client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, List.of(testId)));
@@ -122,7 +122,7 @@ class LeaseExpiryIT {
     String untouched = Ids.method(CLASS_NAME, "neverClaimed");
     List<String> census = List.of(hanging, untouched);
     client.register(
-        sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
+        sessionId, new RegisterRequest(0, 1, Map.of(), census, null, null));
 
     ClaimResponse claimed =
         client.claim(sessionId, new ClaimRequest(0, CLASS_NAME, List.of(hanging)));

@@ -113,7 +113,8 @@ final class ShardingHarness {
             .configurationParameter("shard.enabled", "true")
             .configurationParameter("shard.coordinator.url", coordinatorUrl)
             .configurationParameter("shard.session.id", sessionId)
-            .configurationParameter("shard.index", Integer.toString(shard));
+            .configurationParameter("shard.index", Integer.toString(shard))
+            .configurationParameter("shard.max-attempts", "3");
     classes.forEach(type -> builder.selectors(DiscoverySelectors.selectClass(type)));
     LauncherDiscoveryRequest request = builder.build();
 

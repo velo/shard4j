@@ -64,7 +64,7 @@ class EndpointRecordsTest {
     assertThat(response.epoch()).isOne();
     assertThat(response.registeredCount()).isEqualTo(61);
     assertThat(
-            new RegisterRequest(3, 2, Map.of("ci", "github-actions"), List.of(), null).metadata())
+            new RegisterRequest(3, 2, Map.of("ci", "github-actions"), List.of(), null, null).metadata())
         .containsExactlyInAnyOrderEntriesOf(Map.of("ci", "github-actions"));
   }
 }

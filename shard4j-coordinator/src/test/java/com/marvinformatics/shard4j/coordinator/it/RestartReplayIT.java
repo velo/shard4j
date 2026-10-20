@@ -39,7 +39,7 @@ class RestartReplayIT {
     String untouched = Ids.method(CLASS_B, "neverClaimed");
     List<String> census = List.of(passed, failed, skipped, leased, untouched);
     RegisterRequest registration =
-        new RegisterRequest(0, 1, Map.of(), census, null);
+        new RegisterRequest(0, 1, Map.of(), census, null, 3);
 
     long incarnationBefore;
     GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
@@ -114,6 +114,46 @@ class RestartReplayIT {
     }
   }
 
+  @Test
+  void givenASessionCreatedWithTwoAttempts_whenTheCoordinatorRestarts_thenTheBudgetSurvives()
+      throws Exception {
+    Path dataDir = Files.createTempDirectory(Path.of("target"), "restart-budget-data");
+    String sessionId = UUID.randomUUID().toString();
+    String flaky = Ids.method(CLASS_A, "flakyTwice");
+    RegisterRequest registration =
+        new RegisterRequest(0, 1, Map.of(), List.of(flaky), null, 2);
+
+    GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      first.start();
+      CoordinatorClient client = new CoordinatorClient(first);
+      client.register(sessionId, registration);
+      Fence fence = client.claimOne(sessionId, 0, flaky);
+      client.result(
+          sessionId,
+          new ResultRequest(0, flaky, fence, Outcome.FAILED, 1_000, false, null, null, null));
+      first.getDockerClient().killContainerCmd(first.getContainerId()).exec();
+    } finally {
+      first.stop();
+    }
+
+    GenericContainer<?> second = CoordinatorContainers.coordinator(dataDir, Map.of());
+    try {
+      second.start();
+      CoordinatorClient client = new CoordinatorClient(second);
+      Fence fence = client.claimOne(sessionId, 0, flaky);
+      client.result(
+          sessionId,
+          new ResultRequest(0, flaky, fence, Outcome.FAILED, 1_000, false, null, null, null));
+
+      assertThat(CoordinatorClient.stateOf(client.view(sessionId), flaky))
+          .as("the second failure exhausts a two-attempt budget replayed from the log")
+          .isEqualTo(TestState.FAILED);
+    } finally {
+      second.stop();
+    }
+  }
+
   /**
    * A quiet shard -- registered, but with no completion or pass record yet -- must survive
    * replay in the roster: were it forgotten, every quorum would resolve without it and the
@@ -134,9 +174,9 @@ class RestartReplayIT {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
       client.register(
-          sessionId, new RegisterRequest(0, 1, Map.of(), census, null));
+          sessionId, new RegisterRequest(0, 1, Map.of(), census, null, 3));
       client.register(
-          sessionId, new RegisterRequest(1, 1, Map.of(), census, null));
+          sessionId, new RegisterRequest(1, 1, Map.of(), census, null, 3));
       Fence fence = client.claimOne(sessionId, 0, worked);
       client.result(
           sessionId,
@@ -174,7 +214,7 @@ class RestartReplayIT {
     try {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
-      client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(template), null));
+      client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(template), null, 3));
       Fence fence = client.claimOne(sessionId, 0, template);
       client.result(
           sessionId,
@@ -204,7 +244,7 @@ class RestartReplayIT {
       second.start();
       CoordinatorClient client = new CoordinatorClient(second);
       String replayed = UUID.randomUUID().toString();
-      client.register(replayed, new RegisterRequest(0, 1, Map.of(), List.of(template), null));
+      client.register(replayed, new RegisterRequest(0, 1, Map.of(), List.of(template), null, 3));
       // Three measured positions plus the probe: the aborting row kept its place.
       assertThat(client.view(replayed).tests().stream().map(SessionView.TestView::testId))
           .containsExactlyInAnyOrder(

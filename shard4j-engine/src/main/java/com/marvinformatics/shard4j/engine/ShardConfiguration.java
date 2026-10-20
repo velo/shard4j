@@ -33,6 +33,8 @@ import org.junit.platform.engine.ConfigurationParameters;
  * @param shardCount how many shards this run launched, when the consumer knows it; null
  *     otherwise. Forwarded to the coordinator as a balancing hint so a template's
  *     invocations can be held back for shards that have not registered yet
+ * @param maxAttempts attempts per lease unit before its failure is terminal; the shard
+ *     that creates the session sets it for the whole session
  */
 public record ShardConfiguration(
     boolean enabled,
@@ -43,6 +45,7 @@ public record ShardConfiguration(
     int attempt,
     int concurrency,
     Integer shardCount,
+    int maxAttempts,
     Map<String, String> metadata,
     Duration retryBudget,
     Instant deadline,
@@ -57,12 +60,14 @@ public record ShardConfiguration(
   static final String ATTEMPT = "shard.attempt";
   static final String CONCURRENCY = "shard.concurrency";
   static final String SHARD_COUNT = "shard.count";
+  static final String MAX_ATTEMPTS = "shard.max-attempts";
   static final String METADATA_PREFIX = "shard.metadata.";
   static final String RETRY_BUDGET = "shard.coordinator.retry.budget";
   static final String DEADLINE = "shard.deadline";
   static final String ABORT_GUARD = "shard.abort.all-leased-is-failure";
 
   private static final Duration DEFAULT_RETRY_BUDGET = Duration.ofMinutes(5);
+  private static final int DEFAULT_MAX_ATTEMPTS = 1;
 
   public static ShardConfiguration resolve(ConfigurationParameters parameters) {
     return resolve(parameters, System.getenv());
@@ -71,7 +76,19 @@ public record ShardConfiguration(
   /** The inert engine: no network call, nothing claimed, an empty discovery. */
   public static ShardConfiguration disabled() {
     return new ShardConfiguration(
-        false, null, null, null, -1, 1, 1, null, Map.of(), DEFAULT_RETRY_BUDGET, null, true);
+        false,
+        null,
+        null,
+        null,
+        -1,
+        1,
+        1,
+        null,
+        DEFAULT_MAX_ATTEMPTS,
+        Map.of(),
+        DEFAULT_RETRY_BUDGET,
+        null,
+        true);
   }
 
   static ShardConfiguration resolve(
@@ -89,6 +106,7 @@ public record ShardConfiguration(
         resolver.positiveInt(ATTEMPT, 1),
         resolver.positiveInt(CONCURRENCY, 1),
         resolver.shardCount(),
+        resolver.positiveInt(MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
         resolver.metadata(),
         resolver.duration(RETRY_BUDGET, DEFAULT_RETRY_BUDGET),
         resolver.deadline(),

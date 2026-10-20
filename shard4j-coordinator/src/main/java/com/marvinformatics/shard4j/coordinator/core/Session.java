@@ -54,7 +54,7 @@ final class Session {
   private int nacksDropped;
   private int staleResultsDropped;
   @Getter private int attempt;
-  private final int maxAttempts;
+  @Getter private final int maxAttempts;
   @Getter private long epoch;
   @Getter private Instant lastActivity;
 

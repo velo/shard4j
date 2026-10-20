@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.Map;
 
 /**
- * Test-side builder: a 12-argument positional constructor call hides a transposed pair of
+ * Test-side builder: a 13-argument positional constructor call hides a transposed pair of
  * ints -- attempt and concurrency sit side by side -- behind a clean compile, silently
  * turning a two-slot test serial. Tests name what they mean instead, and the one
  * positional call site left lives here.
@@ -51,6 +51,7 @@ final class ShardConfigurationBuilder {
         1,
         concurrency,
         shardCount,
+        3,
         Map.of(),
         Duration.ofSeconds(30),
         null,

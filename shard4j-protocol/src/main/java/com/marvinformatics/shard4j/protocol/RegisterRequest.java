@@ -19,6 +19,14 @@ import java.util.Map;
  *     when it does not. Purely a balancing hint: it lets the coordinator hold back a fair
  *     share of a template's invocations for shards that have not registered yet, instead
  *     of granting them all to whichever shard asked first. Never part of any quorum.
+ * @param maxAttempts attempts per lease unit before its failure is terminal. The session
+ *     takes it from the registration that creates it; null comes only from engines that
+ *     predate the field, and leaves the choice to the coordinator.
  */
 public record RegisterRequest(
-    int shard, int attempt, Map<String, String> metadata, List<String> tests, Integer shardCount) {}
+    int shard,
+    int attempt,
+    Map<String, String> metadata,
+    List<String> tests,
+    Integer shardCount,
+    Integer maxAttempts) {}
