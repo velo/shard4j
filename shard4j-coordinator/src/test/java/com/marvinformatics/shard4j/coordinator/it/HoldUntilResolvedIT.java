@@ -64,8 +64,8 @@ class HoldUntilResolvedIT {
     String sessionId = UUID.randomUUID().toString();
     String only = Ids.method(CLASS_NAME, "lonely");
     List<String> census = List.of(only);
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, null));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, 3));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, 3));
 
     // s1 takes the only unit.
     Fence first = client.claimOne(sessionId, 0, only);
@@ -128,8 +128,8 @@ class HoldUntilResolvedIT {
     String sessionId = UUID.randomUUID().toString();
     String only = Ids.method(CLASS_NAME, "doomed");
     List<String> census = List.of(only);
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, null));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, 3));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, 3));
 
     // Spend the first two attempts, then leave the third outstanding on shard 0.
     for (int attempt = 1; attempt <= 2; attempt++) {

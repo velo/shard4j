@@ -78,20 +78,20 @@ class ShardConfigurationTest {
   }
 
   @Test
-  void givenNoMaxAttempts_whenResolving_thenThreeAttemptsIsTheDefault() {
+  void givenNoMaxAttempts_whenResolving_thenOneAttemptIsTheDefault() {
     ShardConfiguration configuration = resolve(completeParameters(), SECRET_ONLY);
 
-    assertThat(configuration.maxAttempts()).isEqualTo(3);
+    assertThat(configuration.maxAttempts()).isEqualTo(1);
   }
 
   @Test
   void givenMaxAttemptsInTheEnvironment_whenResolving_thenItArrives() {
     Map<String, String> environment = new HashMap<>(SECRET_ONLY);
-    environment.put("SHARD_MAX_ATTEMPTS", "1");
+    environment.put("SHARD_MAX_ATTEMPTS", "4");
 
     ShardConfiguration configuration = resolve(completeParameters(), environment);
 
-    assertThat(configuration.maxAttempts()).isEqualTo(1);
+    assertThat(configuration.maxAttempts()).isEqualTo(4);
   }
 
   @Test

@@ -218,7 +218,7 @@ system properties) first, then environment variables (`shard.foo.bar` maps to
 | `shard.index` | yes | 0-based shard index. |
 | `shard.attempt` | no (`1`) | Monotonic re-run counter; a higher value voids the previous attempt's leases. |
 | `shard.concurrency` | no (`1`) | Drain slots per shard: how many classes run at once in this JVM. Above 1, read the in-shard parallelism contract below. |
-| `shard.max-attempts` | no (`3`) | Attempts per test before its failure is terminal. The shard that creates the session sets it for the whole session; later shards cannot change it. |
+| `shard.max-attempts` | no (`1`) | Attempts per test before its failure is terminal; `1` means no retries. The shard that creates the session sets it for the whole session; later shards cannot change it. |
 | `shard.count` | no | Total shards this run launched. A balancing hint only -- it lets the coordinator hold back a fair share of a parameterized method's invocations for shards that have not registered yet, instead of granting them all to whichever shard asked first. Never part of any quorum. |
 | `shard.metadata.*` | no | Forwarded verbatim; the only seam CI-vendor vocabulary may pass through. |
 | `shard.coordinator.retry.budget` | no (`5m`) | Transport retry window; must exceed the coordinator deployment's restart time. |
@@ -440,8 +440,9 @@ behind is still there, so the open ask skips whole classes still holding this sh
 failures and sends it to different work, dropping the preference only when every remaining
 class is such a class: a same-shard retry beats no retry. The choice is made once, at the
 class a shard is sent to; a requeued failure is never withheld from a shard that asks for
-it. `shard.max-attempts` (default 3) bounds the attempts per unit; the last one
-has nothing behind it and its failure is terminal. Because the requeue lands inside the
+it. `shard.max-attempts` bounds the attempts per unit, and defaults to 1: no retries
+unless the consumer asks for them. The last attempt has nothing behind it and its failure
+is terminal. Because the requeue lands inside the
 same execution, a shard that has run out of work waits at the barrier rather than exiting,
 and is released only once it cannot be needed.
 

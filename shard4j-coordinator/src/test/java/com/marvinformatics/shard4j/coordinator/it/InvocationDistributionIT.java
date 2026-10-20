@@ -113,7 +113,7 @@ class InvocationDistributionIT {
   @Test
   void givenAProbeThatAborts_whenItsResultArrives_thenTheGrowthWalkStillAdvances() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(GROWING), null, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(GROWING), null, 3));
 
     // A lone shard takes both measured positions plus the probe at #3.
     NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
@@ -155,8 +155,8 @@ class InvocationDistributionIT {
   @Test
   void givenDeclaredShardsThatNeverArrive_whenTheLiveShardsAsk_thenTheLastAskerTakesTheRemainder() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(TEMPLATE), 4, null));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), List.of(TEMPLATE), 4, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(TEMPLATE), 4, 3));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), List.of(TEMPLATE), 4, 3));
 
     // Fair share of five claimable units over the declared fleet of four is two: shard 0
     // leaves room for the shards still booting while shard 1 can still come back.
@@ -208,7 +208,7 @@ class InvocationDistributionIT {
   @Test
   void givenAVanishedMeasuredPosition_whenTheNextSessionRegisters_thenThePlanHasHealed() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(DRIFTING), null, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(DRIFTING), null, 3));
 
     // A lone shard is never capped: it takes all three measured positions plus the probe.
     NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
@@ -240,7 +240,7 @@ class InvocationDistributionIT {
     // But the next session expands from the corrected plan: two positions and a probe at
     // the position that just vanished.
     String healedSession = UUID.randomUUID().toString();
-    client.register(healedSession, new RegisterRequest(0, 1, Map.of(), List.of(DRIFTING), null, null));
+    client.register(healedSession, new RegisterRequest(0, 1, Map.of(), List.of(DRIFTING), null, 3));
     assertThat(client.view(healedSession).tests().stream().map(SessionView.TestView::testId))
         .containsExactlyInAnyOrder(
             DRIFTING + "/[test-template-invocation:#1]",
@@ -252,7 +252,7 @@ class InvocationDistributionIT {
   @Test
   void givenATemplateAggregatingToAborted_whenItReportsWhole_thenTheNextSessionDistributes() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(ASSUMING), null, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(ASSUMING), null, 3));
 
     NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
     assertThat(next.granted().stream().map(Grant::testId)).containsExactly(ASSUMING);
@@ -286,7 +286,7 @@ class InvocationDistributionIT {
   @Test
   void givenAnAbortedRowBesideGrowth_whenTheNextSessionRegisters_thenTheGrownPlanIsRemembered() {
     String sessionId = UUID.randomUUID().toString();
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(SEEDED_ASSUMING), null, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(SEEDED_ASSUMING), null, 3));
 
     // A lone shard is never capped: both measured positions plus the probe past them.
     NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
@@ -327,7 +327,7 @@ class InvocationDistributionIT {
   /** What a shard would be handed, minus the probe -- appended whatever the plan is. */
   private static List<String> measuredPlanOf(String templateId) {
     String probeSession = UUID.randomUUID().toString();
-    client.register(probeSession, new RegisterRequest(0, 1, Map.of(), List.of(templateId), null, null));
+    client.register(probeSession, new RegisterRequest(0, 1, Map.of(), List.of(templateId), null, 3));
     return client.next(probeSession, new NextClassRequest(0)).granted().stream()
         .filter(grant -> !grant.probe())
         .map(Grant::testId)
@@ -336,8 +336,8 @@ class InvocationDistributionIT {
   }
 
   private static void registerBoth(String sessionId, List<String> census) {
-    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, null));
-    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, null));
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, 3));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, 3));
   }
 
   private static String invocation(int position) {

@@ -193,6 +193,7 @@
                     <shard.coordinator.url>${shard.coordinator.url}</shard.coordinator.url>
                     <shard.session.id>${shard.session.id}</shard.session.id>
                     <shard.index>${shard.index}</shard.index>
+                    <shard.max-attempts>3</shard.max-attempts>
                   </systemPropertyVariables>
                 </configuration>
               </execution>

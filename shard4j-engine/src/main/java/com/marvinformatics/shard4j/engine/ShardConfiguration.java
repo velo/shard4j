@@ -67,7 +67,7 @@ public record ShardConfiguration(
   static final String ABORT_GUARD = "shard.abort.all-leased-is-failure";
 
   private static final Duration DEFAULT_RETRY_BUDGET = Duration.ofMinutes(5);
-  private static final int DEFAULT_MAX_ATTEMPTS = 3;
+  private static final int DEFAULT_MAX_ATTEMPTS = 1;
 
   public static ShardConfiguration resolve(ConfigurationParameters parameters) {
     return resolve(parameters, System.getenv());

@@ -55,7 +55,7 @@ public final class CoordinatorCore {
   private static final long SPAN_SLACK_MS = 1_000;
   // For registrations from engines, and REGISTERED records from logs, that predate the
   // client-supplied attempt budget.
-  private static final int DEFAULT_MAX_ATTEMPTS = 3;
+  private static final int DEFAULT_MAX_ATTEMPTS = 1;
 
   private final Object writeLock = new Object();
   private final Map<String, Session> sessions = new HashMap<>();

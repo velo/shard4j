@@ -61,7 +61,7 @@ class RetryBarrierIT {
   }
 
   private static RegisterRequest registration(int shard, List<String> census) {
-    return new RegisterRequest(shard, 1, Map.of(), census, null, null);
+    return new RegisterRequest(shard, 1, Map.of(), census, null, 3);
   }
 
   private static ResultRequest result(
@@ -507,7 +507,7 @@ class RetryBarrierIT {
 
     // A registration at a higher attempt: the old shards are known-dead, the epoch moves on.
     client.register(
-        sessionId, new RegisterRequest(5, 2, Map.of(), census, null, null));
+        sessionId, new RegisterRequest(5, 2, Map.of(), census, null, 3));
 
     CoordinatorClient.RawResponse zombiePoll =
         client.barrierRaw(sessionId, new BarrierRequest(0, 1));
@@ -600,6 +600,19 @@ class RetryBarrierIT {
     SessionView view = client.view(sessionId);
     assertThat(CoordinatorClient.stateOf(view, flaky)).isEqualTo(TestState.FAILED);
     assertThat(CoverageVerdict.of(view)).isEqualTo(SessionVerdict.FAILED);
+  }
+
+  @Test
+  void givenARegistrationWithoutMaxAttempts_whenAUnitFails_thenTheFailureIsTerminal() {
+    String sessionId = UUID.randomUUID().toString();
+    String flaky = Ids.method("com.example.orders.LegacyEngineIT", "flaky");
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(flaky), null, null));
+
+    Fence fence = client.claimOne(sessionId, 0, flaky);
+    client.result(sessionId, result(0, flaky, fence, Outcome.FAILED));
+
+    assertThat(CoordinatorClient.stateOf(client.view(sessionId), flaky))
+        .isEqualTo(TestState.FAILED);
   }
 
   @Test

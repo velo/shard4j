@@ -39,7 +39,7 @@ class RestartReplayIT {
     String untouched = Ids.method(CLASS_B, "neverClaimed");
     List<String> census = List.of(passed, failed, skipped, leased, untouched);
     RegisterRequest registration =
-        new RegisterRequest(0, 1, Map.of(), census, null, null);
+        new RegisterRequest(0, 1, Map.of(), census, null, 3);
 
     long incarnationBefore;
     GenericContainer<?> first = CoordinatorContainers.coordinator(dataDir, Map.of());
@@ -174,9 +174,9 @@ class RestartReplayIT {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
       client.register(
-          sessionId, new RegisterRequest(0, 1, Map.of(), census, null, null));
+          sessionId, new RegisterRequest(0, 1, Map.of(), census, null, 3));
       client.register(
-          sessionId, new RegisterRequest(1, 1, Map.of(), census, null, null));
+          sessionId, new RegisterRequest(1, 1, Map.of(), census, null, 3));
       Fence fence = client.claimOne(sessionId, 0, worked);
       client.result(
           sessionId,
@@ -214,7 +214,7 @@ class RestartReplayIT {
     try {
       first.start();
       CoordinatorClient client = new CoordinatorClient(first);
-      client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(template), null, null));
+      client.register(sessionId, new RegisterRequest(0, 1, Map.of(), List.of(template), null, 3));
       Fence fence = client.claimOne(sessionId, 0, template);
       client.result(
           sessionId,
@@ -244,7 +244,7 @@ class RestartReplayIT {
       second.start();
       CoordinatorClient client = new CoordinatorClient(second);
       String replayed = UUID.randomUUID().toString();
-      client.register(replayed, new RegisterRequest(0, 1, Map.of(), List.of(template), null, null));
+      client.register(replayed, new RegisterRequest(0, 1, Map.of(), List.of(template), null, 3));
       // Three measured positions plus the probe: the aborting row kept its place.
       assertThat(client.view(replayed).tests().stream().map(SessionView.TestView::testId))
           .containsExactlyInAnyOrder(
