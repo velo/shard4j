@@ -80,7 +80,7 @@ class SessionLoopIT {
         shard,
         attempt,
         Map.of("ci", "example-ci", "run", "42"),
-        census(rowsMethod), null);
+        census(rowsMethod), null, null);
   }
 
   private static ResultRequest passed(int shard, String testId, Fence fence, long durationMs) {
@@ -306,7 +306,7 @@ class SessionLoopIT {
     String neverRegistered = Ids.method(ALPHA, "phantom");
     List<String> divergent = List.of(Ids.method(ALPHA, "first"), neverRegistered);
     CoordinatorClient.RawResponse response =
-        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent, null));
+        client.registerRaw(sessionId, new RegisterRequest(1, 1, Map.of(), divergent, null, null));
     assertThat(response.status()).isEqualTo(409);
     assertThat(response.body())
         .contains(neverRegistered)
@@ -325,13 +325,13 @@ class SessionLoopIT {
         client.registerRaw(
             sessionId,
             new RegisterRequest(
-                0, 1, Map.of(), List.of(invocationId), null));
+                0, 1, Map.of(), List.of(invocationId), null, null));
     assertThat(invocationInCensus.status()).isEqualTo(400);
 
     CoordinatorClient.RawResponse emptyCensus =
         client.registerRaw(
             sessionId,
-            new RegisterRequest(0, 1, Map.of(), List.of(), null));
+            new RegisterRequest(0, 1, Map.of(), List.of(), null, null));
     assertThat(emptyCensus.status()).isEqualTo(400);
 
     client.register(sessionId, registration(0, 1));

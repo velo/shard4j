@@ -77,7 +77,7 @@ class ConcurrentClaimsIT {
               () -> {
                 CoordinatorClient client = new CoordinatorClient(coordinator);
                 client.register(
-                    sessionId, new RegisterRequest(shardIndex, 1, Map.of(), census, null));
+                    sessionId, new RegisterRequest(shardIndex, 1, Map.of(), census, null, null));
                 startingGun.await();
                 boolean anyGrantedInSweep = true;
                 while (anyGrantedInSweep) {

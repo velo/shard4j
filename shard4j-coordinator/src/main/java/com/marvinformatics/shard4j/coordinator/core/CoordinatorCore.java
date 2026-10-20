@@ -53,6 +53,9 @@ public final class CoordinatorCore {
   private static final String REQUIRED_ID_PREFIX = "[engine:junit-jupiter]/[class:";
   private static final int REASON_LIMIT = 500;
   private static final long SPAN_SLACK_MS = 1_000;
+  // For registrations from engines, and REGISTERED records from logs, that predate the
+  // client-supplied attempt budget.
+  private static final int DEFAULT_MAX_ATTEMPTS = 3;
 
   private final Object writeLock = new Object();
   private final Map<String, Session> sessions = new HashMap<>();
@@ -65,7 +68,6 @@ public final class CoordinatorCore {
   private final long incarnation;
   private final Duration leaseTtl;
   private final int maxClaimBatch;
-  private final int maxAttempts;
   private final Duration gcIdle;
   private long seq;
 
@@ -82,7 +84,6 @@ public final class CoordinatorCore {
       String tenantKey,
       long incarnation,
       Duration leaseTtl,
-      int maxAttempts,
       int maxClaimBatch,
       Duration gcIdle) {
     this.sessionLog = sessionLog;
@@ -94,7 +95,6 @@ public final class CoordinatorCore {
     this.incarnation = incarnation;
     this.leaseTtl = leaseTtl;
     this.maxClaimBatch = maxClaimBatch;
-    this.maxAttempts = maxAttempts;
     this.gcIdle = gcIdle;
   }
 
@@ -104,12 +104,14 @@ public final class CoordinatorCore {
       Instant now = clock.instant();
       Session session = liveSessionOrNull(sessionId, now);
       if (session == null) {
+        int maxAttempts = orDefault(request.maxAttempts());
         sessionLog.append(
             LogRecord.registered(
                 tenantKey,
                 sessionId,
                 request.attempt(),
                 1,
+                maxAttempts,
                 request.metadata(),
                 request.tests(),
                 now));
@@ -124,12 +126,22 @@ public final class CoordinatorCore {
                 now);
         sessions.put(sessionId, session);
         log.info(
-            "Session {} created: {} lease units, attempt {}",
+            "Session {} created: {} lease units, attempt {}, {} attempts per unit",
             sessionId,
             session.registeredCount(),
-            request.attempt());
+            request.attempt(),
+            maxAttempts);
       } else {
         requireMatchingCensus(session, request.tests());
+        if (request.maxAttempts() != null && request.maxAttempts() != session.maxAttempts()) {
+          log.warn(
+              "Session {} shard {} asked for {} attempts per unit; keeping the {} it was"
+                  + " created with",
+              sessionId,
+              request.shard(),
+              request.maxAttempts(),
+              session.maxAttempts());
+        }
         if (request.attempt() > session.attempt()) {
           long newEpoch = session.epoch() + 1;
           sessionLog.append(
@@ -138,6 +150,7 @@ public final class CoordinatorCore {
                   sessionId,
                   request.attempt(),
                   newEpoch,
+                  session.maxAttempts(),
                   request.metadata(),
                   request.tests(),
                   now));
@@ -507,7 +520,7 @@ public final class CoordinatorCore {
               record.session(),
               record.attempt(),
               record.epoch(),
-              maxAttempts,
+              orDefault(record.maxAttempts()),
               record.metadata(),
               distribution.expandCensus(record.tests()),
               record.ts()));
@@ -738,6 +751,9 @@ public final class CoordinatorCore {
     if (request.shardCount() != null && request.shardCount() < 1) {
       throw new ProtocolViolationException("shardCount must be a positive integer when present");
     }
+    if (request.maxAttempts() != null && request.maxAttempts() < 1) {
+      throw new ProtocolViolationException("maxAttempts must be a positive integer when present");
+    }
     if (request.tests() == null || request.tests().isEmpty()) {
       throw new ProtocolViolationException(
           "A census must enumerate at least one lease unit; an empty enumeration is the"
@@ -770,6 +786,10 @@ public final class CoordinatorCore {
    * mismatch names exactly which ids diverged -- no digest, so no separator, collation or
    * charset for the two sides to agree on.
    */
+  private static int orDefault(Integer maxAttempts) {
+    return maxAttempts == null ? DEFAULT_MAX_ATTEMPTS : maxAttempts;
+  }
+
   private static void requireMatchingCensus(Session session, List<String> offeredTests) {
     Set<String> stored = session.censusIds();
     Set<String> offered = new LinkedHashSet<>(offeredTests);

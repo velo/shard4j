@@ -145,7 +145,7 @@ class FailureStatsIT {
     client.register(
         sessionId,
         new RegisterRequest(
-            0, 1, Map.of(), List.of(FLAKY_TEST_ID, BROKEN_TEST_ID, PASSING_TEST_ID), null));
+            0, 1, Map.of(), List.of(FLAKY_TEST_ID, BROKEN_TEST_ID, PASSING_TEST_ID), null, null));
     claimAndSubmitResult(client, sessionId, FLAKY_TEST_ID, Outcome.FAILED, 3_000, TIMEOUT);
     claimAndSubmitResult(client, sessionId, FLAKY_TEST_ID, Outcome.PASSED, 1_000, null);
     claimAndSubmitResult(client, sessionId, PASSING_TEST_ID, Outcome.PASSED, 500, null);

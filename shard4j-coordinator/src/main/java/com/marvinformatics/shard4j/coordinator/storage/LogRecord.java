@@ -24,6 +24,7 @@ public record LogRecord(
     String session,
     Integer attempt,
     Long epoch,
+    Integer maxAttempts,
     Map<String, String> metadata,
     List<String> tests,
     String testId,
@@ -52,6 +53,7 @@ public record LogRecord(
       String session,
       int attempt,
       long epoch,
+      int maxAttempts,
       Map<String, String> metadata,
       List<String> tests,
       Instant ts) {
@@ -61,6 +63,7 @@ public record LogRecord(
         .session(session)
         .attempt(attempt)
         .epoch(epoch)
+        .maxAttempts(maxAttempts)
         .metadata(metadata)
         .tests(tests)
         .ts(ts)
