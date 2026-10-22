@@ -276,23 +276,20 @@ final class Session {
    * shard stands in the hunger queue against how much work exists or could yet exist.
    *
    * <p>Two counts bound how many shards are worth keeping: units claimable right now, and
-   * leases still outstanding. A shard ranked inside the first is told to RUN; one ranked
-   * inside the sum is held as spare capacity; anything past that is surplus and released.
+   * leases whose failure would requeue them. A shard ranked inside the first is told to
+   * RUN; one ranked inside the sum is held as spare capacity; anything past that is surplus
+   * and released.
    *
    * <p>That reconciles two rules that look opposed. A finished shard should not cost the
    * fleet the slowest shard's wall time -- but with two shards and one test, releasing the
-   * idle one strands the next attempt on the shard that just failed it, because there is
-   * nowhere else for it to go. Sizing the hold to the work keeps a spare for every lease
-   * that might return, and no more.
+   * idle one strands the retry on the shard that just failed it, because there is nowhere
+   * else for it to go. Sizing the hold to the retries keeps a spare for every lease that
+   * might come back as a retry, and no more.
    *
-   * <p><strong>Every</strong> outstanding lease counts, including one on its final attempt.
-   * It is tempting to exclude those on the grounds that a final attempt cannot requeue and
-   * so can create no work -- but a lease has three exits, not two. Besides PASSED and
-   * FAILED it can be <em>restored</em>: expiry and NACK both return the unit to PENDING
-   * with the attempt un-spent. Excluding final-attempt leases releases the last spare
-   * exactly when the holder is about to die, which strands the unit with nobody left to
-   * poll and loses the run -- the failure mode this barrier exists to prevent. Holding
-   * costs at most one test's duration; the alternative costs the whole suite.
+   * <p>A lease on its final attempt holds no spare. Expiry and NACK can still restore it,
+   * but a spare kept for that idles a whole runner for the length of the slowest test to
+   * cover a dying holder -- and a holder that dies at its deadline NACKs when the spare's
+   * own deadline leaves no room to run the unit anyway.
    */
   BarrierResponse barrierDecision(int shard) {
     if (isReleased(shard)) {
@@ -304,7 +301,7 @@ final class Session {
     for (UnitState unit : units.values()) {
       if (unit.state == TestState.PENDING) {
         claimable++;
-      } else if (unit.state == TestState.LEASED) {
+      } else if (unit.state == TestState.LEASED && unit.attempts + 1 < maxAttempts) {
         outstanding++;
         Instant expiresAt = unit.lease.expiresAt();
         if (earliestLeaseExpiry == null || expiresAt.isBefore(earliestLeaseExpiry)) {
