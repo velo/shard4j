@@ -10,7 +10,6 @@ import com.marvinformatics.shard4j.protocol.ClaimRequest;
 import com.marvinformatics.shard4j.protocol.ClaimResponse;
 import com.marvinformatics.shard4j.protocol.DepartRequest;
 import com.marvinformatics.shard4j.protocol.Fence;
-import com.marvinformatics.shard4j.protocol.NackRequest;
 import com.marvinformatics.shard4j.protocol.Outcome;
 import com.marvinformatics.shard4j.protocol.RegisterRequest;
 import com.marvinformatics.shard4j.protocol.ResultRequest;
@@ -33,9 +32,9 @@ import org.testcontainers.containers.GenericContainer;
  * Two shards, one test: the smallest fleet in which a shard can be starved, and the one
  * where releasing an idle shard too early is unrecoverable rather than merely wasteful.
  *
- * <p>The rule under test is that a shard is held until every outstanding lease has produced
- * a result, because until then the work may come back. Release the idle shard instead and
- * the last attempt is stranded on whichever shard happens to be holding it.
+ * <p>The rule under test is that a shard is held while an outstanding lease could still come
+ * back as a retry. Release the idle shard instead and the retry is stranded on whichever
+ * shard happens to be holding it; once no retry is possible, holding it buys nothing.
  */
 @Tag("shard4j-harness")
 class HoldUntilResolvedIT {
@@ -124,7 +123,7 @@ class HoldUntilResolvedIT {
   }
 
   @Test
-  void givenALeaseOnItsFinalAttempt_whenAnIdleShardAsks_thenItIsStillHeldBecauseExpiryCanReturnIt() {
+  void givenALeaseOnItsFinalAttempt_whenAnIdleShardAsks_thenItIsReleasedBecauseNothingCanRequeue() {
     String sessionId = UUID.randomUUID().toString();
     String only = Ids.method(CLASS_NAME, "doomed");
     List<String> census = List.of(only);
@@ -140,49 +139,26 @@ class HoldUntilResolvedIT {
     }
     client.claimOne(sessionId, 0, only);
 
-    // A final attempt still has to be held for. Releasing the spare here reads plausible --
-    // that lease cannot requeue by failing -- but failing is not its only exit: expiry and
-    // NACK both hand the unit back with the attempt un-spent. Release shard 1 now and a
-    // SIGTERM on shard 0 a second later strands the unit with nobody left to poll.
     assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
-        .as("an outstanding lease can still return via expiry or NACK, so the spare is kept")
-        .isEqualTo(BarrierResponse.Action.WAIT);
+        .as("a final attempt cannot come back as a retry, so there is nothing to hold a spare for")
+        .isEqualTo(BarrierResponse.Action.DONE);
+    assertThat(client.view(sessionId).shards())
+        .filteredOn(shard -> shard.shard() == 1)
+        .extracting(SessionView.ShardView::released)
+        .containsExactly(true);
+  }
 
-    // Proving it: shard 0 abandons the unit exactly as a deadline-killed job would, and the
-    // shard that was nearly released is the one that finishes the run.
-    client.nack(
-        sessionId,
-        new NackRequest(
-            0,
-            List.of(
-                new NackRequest.NackedLease(
-                    only,
-                    client.view(sessionId).tests().get(0).lease().fence(),
-                    "job deadline",
-                    false))));
-    client.depart(sessionId, new DepartRequest(0, 1));
+  @Test
+  void givenTheDefaultSingleAttempt_whenAnIdleShardAsksWhileTheOnlyUnitIsLeased_thenItIsDone() {
+    String sessionId = UUID.randomUUID().toString();
+    String only = Ids.method(CLASS_NAME, "once");
+    List<String> census = List.of(only);
+    client.register(sessionId, new RegisterRequest(0, 1, Map.of(), census, 2, null));
+    client.register(sessionId, new RegisterRequest(1, 1, Map.of(), census, 2, null));
+    client.claimOne(sessionId, 0, only);
 
     assertThat(client.barrier(sessionId, new BarrierRequest(1, 1)).action())
-        .isEqualTo(BarrierResponse.Action.RUN);
-    ClaimResponse rescued = client.claim(sessionId, new ClaimRequest(1, CLASS_NAME, census));
-    assertThat(rescued.granted()).hasSize(1);
-    client.result(
-        sessionId,
-        new ResultRequest(
-            1,
-            only,
-            rescued.granted().get(0).fence(),
-            Outcome.PASSED,
-            600,
-            false,
-            null,
-            null,
-            null));
-
-    SessionView view = client.view(sessionId);
-    assertThat(CoordinatorClient.stateOf(view, only)).isEqualTo(TestState.PASSED);
-    assertThat(CoverageVerdict.of(view))
-        .as("a final-attempt lease abandoned by a dying shard must not cost the run")
-        .isEqualTo(SessionVerdict.PASSED);
+        .as("with no retry budget an idle shard has nothing left to wait for")
+        .isEqualTo(BarrierResponse.Action.DONE);
   }
 }
