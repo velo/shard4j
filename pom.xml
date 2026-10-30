@@ -6,7 +6,7 @@
 
   <groupId>com.marvinformatics</groupId>
   <artifactId>shard4j</artifactId>
-  <version>0.8.2</version>
+  <version>0.8.3-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>shard4j</name>
