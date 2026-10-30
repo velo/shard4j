@@ -252,12 +252,13 @@ final class UnitOutcomeListener implements EngineExecutionListener {
                 verdict.failure()));
   }
 
-  /** Explains every leased unit under a container that emitted nothing for its children. */
+  /** Explains each unit under a silent container, save probes it never proved exist. */
   private Set<String> fillUnitsBeneath(String containerWireId, Verdict verdict) {
     String prefix = containerWireId + "/";
     Set<String> filled = new LinkedHashSet<>();
-    for (String unit : leases.keySet()) {
-      if (!finalized.containsKey(unit) && unit.startsWith(prefix)) {
+    for (Map.Entry<String, Grant> lease : leases.entrySet()) {
+      String unit = lease.getKey();
+      if (!finalized.containsKey(unit) && unit.startsWith(prefix) && !lease.getValue().probe()) {
         complete(unit, verdict, 0, invocationsByUnit.get(unit));
         filled.add(unit);
       }

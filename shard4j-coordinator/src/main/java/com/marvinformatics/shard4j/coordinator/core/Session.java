@@ -9,6 +9,7 @@ import com.marvinformatics.shard4j.protocol.SessionView;
 import com.marvinformatics.shard4j.protocol.TestState;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -47,6 +48,7 @@ final class Session {
   private final Set<String> registered = new LinkedHashSet<>();
   private final Map<String, List<String>> unitsByCensusId = new LinkedHashMap<>();
   private final Map<String, UnitState> units = new LinkedHashMap<>();
+  private final Map<String, Integer> unprovenProbeStreaks = new HashMap<>();
   private final ShardRoster roster = new ShardRoster();
   private final List<NackRequest.NackedLease> nacks = new ArrayList<>();
   private final List<ResultRequest> staleResults = new ArrayList<>();
@@ -215,6 +217,15 @@ final class Session {
     units.put(unit.id(), new UnitState(unit));
     unitsByCensusId.get(unit.censusId()).add(unit.id());
     return true;
+  }
+
+  /** How many probes of the method in a row have now materialised without passing. */
+  int recordProbeOutcome(String censusId, Outcome outcome) {
+    if (outcome == Outcome.PASSED) {
+      unprovenProbeStreaks.remove(censusId);
+      return 0;
+    }
+    return unprovenProbeStreaks.merge(censusId, 1, Integer::sum);
   }
 
   /**

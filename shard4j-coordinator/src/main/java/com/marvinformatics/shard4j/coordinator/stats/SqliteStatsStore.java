@@ -38,6 +38,8 @@ final class SqliteStatsStore implements StatsStore {
   static final int STACK_TRACE_MAX_CHARS = 64 * 1024;
   static final int MESSAGE_MAX_CHARS = 4 * 1024;
   private static final int EXCEPTION_CLASS_MAX_CHARS = 512;
+  private static final int AUTO_VACUUM_FULL = 1;
+  private static final int WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 
   private final Connection writeConnection;
   private final Connection readConnection;
@@ -49,8 +51,10 @@ final class SqliteStatsStore implements StatsStore {
       config.setSynchronous(SQLiteConfig.SynchronousMode.NORMAL);
       config.enforceForeignKeys(true);
       config.setBusyTimeout(5_000);
+      config.setJournalSizeLimit(WAL_SIZE_LIMIT_BYTES);
       Connection writeConnection = config.createConnection("jdbc:sqlite:" + databaseFile);
       try {
+        makeDeletesShrinkTheFile(writeConnection, databaseFile);
         StatsSchema.migrateSchemaToLatest(writeConnection, databaseFile);
       } catch (SQLException | RuntimeException e) {
         writeConnection.close();
@@ -64,6 +68,28 @@ final class SqliteStatsStore implements StatsStore {
           databaseFile,
           e.toString());
       return new DisabledStatsStore(e.toString());
+    }
+  }
+
+  private static void makeDeletesShrinkTheFile(Connection connection, Path databaseFile)
+      throws SQLException {
+    try (Statement statement = connection.createStatement()) {
+      try (ResultSet mode = statement.executeQuery("PRAGMA auto_vacuum")) {
+        if (mode.getInt(1) == AUTO_VACUUM_FULL) {
+          return;
+        }
+      }
+      if (!isEmpty(statement)) {
+        log.info("Rebuilding {} once so pruning can return freed pages to the disk", databaseFile);
+      }
+      statement.executeUpdate("PRAGMA auto_vacuum = FULL");
+      statement.executeUpdate("VACUUM");
+    }
+  }
+
+  private static boolean isEmpty(Statement statement) throws SQLException {
+    try (ResultSet objects = statement.executeQuery("SELECT count(*) FROM sqlite_schema")) {
+      return objects.getInt(1) == 0;
     }
   }
 
@@ -385,12 +411,13 @@ final class SqliteStatsStore implements StatsStore {
       try (PreparedStatement deleteExpiredAttempts =
               writeConnection.prepareStatement(
                   "DELETE FROM test_attempt WHERE recorded_at_ms < ?");
-          Statement deleteOrphanDistinctFailures = writeConnection.createStatement()) {
+          Statement statement = writeConnection.createStatement()) {
         deleteExpiredAttempts.setLong(1, now.minus(retention).toEpochMilli());
         deleteExpiredAttempts.executeUpdate();
-        deleteOrphanDistinctFailures.executeUpdate(
+        statement.executeUpdate(
             "DELETE FROM distinct_failure WHERE NOT EXISTS (SELECT 1 FROM test_attempt t"
                 + " WHERE t.distinct_failure_id = distinct_failure.id)");
+        statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
       } catch (SQLException e) {
         log.warn("Pruning failure statistics failed: {}", e.toString());
       }

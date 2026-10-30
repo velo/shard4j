@@ -9,7 +9,13 @@ import com.marvinformatics.shard4j.coordinator.core.AttemptRecorder.Attempt;
 import com.marvinformatics.shard4j.coordinator.core.UnknownSessionException;
 import com.marvinformatics.shard4j.protocol.Failure;
 import com.marvinformatics.shard4j.protocol.Outcome;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -300,6 +306,48 @@ class StatsStoreTest {
 
     assertThat(store).isInstanceOf(SqliteStatsStore.class);
     assertThat(store.findLatestFailedAttempts(T0, DAY_LATER, null, 10).failedAttempts()).hasSize(1);
+  }
+
+  @Test
+  void givenARunawaySessionPastRetention_whenPruning_thenTheDatabaseFileShrinks()
+      throws IOException {
+    Path databaseFile = dir.resolve("stats.db");
+    for (int position = 1; position <= 5_000; position++) {
+      Failure distinct =
+          new Failure(
+              "java.lang.ExceptionInInitializerError",
+              "row " + position,
+              "java.lang.ExceptionInInitializerError: row " + position + "\n"
+                  + "\tat x\n".repeat(50));
+      record("runaway", 1, T0, failedAttempt(buildRowsInvocationTestId(position), 0, distinct));
+    }
+    store.prune(Duration.ofDays(1), T0);
+    long grown = Files.size(databaseFile);
+
+    store.prune(Duration.ofDays(1), DAY_LATER.plus(Duration.ofDays(1)));
+
+    assertThat(Files.size(databaseFile)).isLessThan(grown / 10);
+  }
+
+  @Test
+  void givenADatabaseCreatedWithoutAutoVacuum_whenOpened_thenItIsConvertedAndKeepsItsRows()
+      throws SQLException {
+    store.close();
+    Path legacyFile = dir.resolve("legacy.db");
+    try (Connection legacy = DriverManager.getConnection("jdbc:sqlite:" + legacyFile)) {
+      StatsSchema.migrateSchemaToLatest(legacy, legacyFile);
+    }
+    store = StatsStore.openOrCreateElseDisabled(legacyFile);
+    record("s1", 1, T0, failedAttempt(PAY, 100, TIMEOUT));
+    store.close();
+
+    store = StatsStore.openOrCreateElseDisabled(legacyFile);
+
+    assertThat(store.findLatestFailedAttempts(T0, DAY_LATER, null, 10).failedAttempts()).hasSize(1);
+    try (Connection reopened = DriverManager.getConnection("jdbc:sqlite:" + legacyFile);
+        ResultSet mode = reopened.createStatement().executeQuery("PRAGMA auto_vacuum")) {
+      assertThat(mode.getInt(1)).isEqualTo(1);
+    }
   }
 
   private void record(

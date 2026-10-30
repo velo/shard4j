@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,9 @@ class InvocationDistributionIT {
   private static final String DRIFTING = Ids.template(CLASS_NAME, "driftingRows(java.lang.String)");
   private static final String GROWING = Ids.template(CLASS_NAME, "growingRows(java.lang.String)");
   private static final String ASSUMING = Ids.template(CLASS_NAME, "assumingRows(java.lang.String)");
+  private static final int UNPROVEN_PROBES_BEFORE_THE_WALK_STOPS = 3;
+  private static final String UNREACHABLE =
+      Ids.template(CLASS_NAME, "unreachableRows(java.lang.String)");
   private static final String SEEDED_ASSUMING =
       Ids.template(CLASS_NAME, "seededAssumingRows(java.lang.String)");
 
@@ -53,6 +57,7 @@ class InvocationDistributionIT {
         dataDir, TEMPLATE, Map.of(1, 40_000L, 2, 50_000L, 3, 60_000L, 4, 70_000L));
     History.seedTemplate(dataDir, DRIFTING, Map.of(1, 30_000L, 2, 35_000L, 3, 45_000L));
     History.seedTemplate(dataDir, GROWING, Map.of(1, 10_000L, 2, 20_000L));
+    History.seedTemplate(dataDir, UNREACHABLE, Map.of(1, 10_000L, 2, 20_000L));
     History.seedTemplate(dataDir, SEEDED_ASSUMING, Map.of(1, 25_000L, 2, 15_000L));
     coordinator = CoordinatorContainers.coordinator(dataDir, Map.of());
     coordinator.start();
@@ -140,6 +145,31 @@ class InvocationDistributionIT {
     NextClassResponse walked = client.next(sessionId, new NextClassRequest(0));
     assertThat(walked.granted().stream().map(Grant::testId))
         .containsExactly(Ids.invocation(GROWING, 4));
+  }
+
+  @Test
+  void givenAnEngineReportingItsClassSetupFailureOnEveryProbe_whenTheShardDrains_thenTheGrowthWalkStops() {
+    String sessionId = UUID.randomUUID().toString();
+    client.register(
+        sessionId, new RegisterRequest(0, 1, Map.of(), List.of(UNREACHABLE), null, 1));
+
+    // What an engine before 0.8.2 does when static initialisation fails: every leased
+    // position, probes included, comes back FAILED in no time, as if each one existed.
+    int asks = 0;
+    for (NextClassResponse next = client.next(sessionId, new NextClassRequest(0));
+        !next.granted().isEmpty() && asks < 50;
+        next = client.next(sessionId, new NextClassRequest(0)), asks++) {
+      for (Grant grant : next.granted()) {
+        report(sessionId, 0, grant, Outcome.FAILED, "Could not initialize class");
+      }
+    }
+
+    int lastProbe = 2 + 1 + UNPROVEN_PROBES_BEFORE_THE_WALK_STOPS;
+    assertThat(client.view(sessionId).tests().stream().map(SessionView.TestView::testId))
+        .containsExactlyInAnyOrderElementsOf(
+            IntStream.rangeClosed(1, lastProbe)
+                .mapToObj(position -> Ids.invocation(UNREACHABLE, position))
+                .toList());
   }
 
   @Test
