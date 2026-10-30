@@ -26,6 +26,8 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 final class InvocationDistribution {
 
+  private static final int MAX_UNPROVEN_PROBES = 3;
+
   private final DurationStore durations;
 
   /**
@@ -117,22 +119,8 @@ final class InvocationDistribution {
       return;
     }
     String censusId = unit.censusId();
-    // A probe that materialised is proof the set grew, whatever its outcome -- a truly
-    // nonexistent position produces no result at all, only a vanished NACK. Chained before
-    // any outcome gate on purpose: gating the walk would halt discovery here, leaving every
-    // row past it silently unrun in every session.
     if (unit.probe()) {
-      int next = unit.invocation() + 1;
-      boolean added =
-          session.addProbe(
-              new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true));
-      if (added) {
-        log.info(
-            "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
-            sessionId,
-            request.testId(),
-            next);
-      }
+      walkGrowth(sessionId, session, unit, request);
     }
     OptionalLong duration = DurationStore.rowDuration(request.outcome(), request.durationMs());
     if (duration.isEmpty()) {
@@ -141,6 +129,42 @@ final class InvocationDistribution {
     durations.recordInvocation(key, sessionId, unit.invocation(), duration.getAsLong());
     if (session.measuredUnitsAllAbsorbed(censusId)) {
       durations.markInvocationsComplete(key, sessionId);
+    }
+  }
+
+  /**
+   * A materialised probe proves growth whatever its outcome, so the walk is not gated on a
+   * pass -- that would leave every row past an aborting one unrun in every session. But an
+   * engine before 0.8.2 answers a probe its class never reached with the class's setup
+   * failure, which reads the same and walks without bound; a run of non-passing probes is
+   * cut short instead, since new rows that all fail make a red run anyway.
+   */
+  private void walkGrowth(
+      String sessionId, Session session, ClaimableUnit probe, ResultRequest request) {
+    String censusId = probe.censusId();
+    int next = probe.invocation() + 1;
+    ClaimableUnit nextProbe =
+        new ClaimableUnit(censusId, CensusUnit.parse(censusId).atPosition(next), true);
+    if (session.isRegistered(nextProbe.id())) {
+      return;
+    }
+    int unprovenStreak = session.recordProbeOutcome(censusId, request.outcome());
+    if (unprovenStreak > MAX_UNPROVEN_PROBES) {
+      log.warn(
+          "Session {}: {} consecutive probes of {} did not pass; stopping the growth walk at"
+              + " {} rather than probing without bound",
+          sessionId,
+          unprovenStreak,
+          censusId,
+          request.testId());
+      return;
+    }
+    if (session.addProbe(nextProbe)) {
+      log.info(
+          "Session {}: probe {} materialised -- the parameter set grew; probing #{} next",
+          sessionId,
+          request.testId(),
+          next);
     }
   }
 
